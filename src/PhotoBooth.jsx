@@ -49,6 +49,69 @@ function NavButtons({ onBack, onNext, nextLabel, nextDisabled, nextClass }) {
   );
 }
 
+function MapView({ config, photos, shootingQueue, onClose, onPlotTap, mapSidePick, onSidePick, onCancelSidePick }) {
+  const allReps = Array.from({ length: config.totalReps }, (_, i) => i + 1);
+  const photographedKeys = new Set(photos.map(p => `${p.rep}-${p.plot}`));
+  const queueKeys = new Set(shootingQueue.map(s => `${s.rep}-${s.plot}`));
+
+  return (
+    <div className="map-overlay" onClick={onClose}>
+      <div className="map-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="map-header">
+          <h3 className="map-title">Trial Map</h3>
+          <button className="map-close" onClick={onClose} aria-label="Close map">✕</button>
+        </div>
+        <p className="map-hint">Tap any plot to take an extra photo. Green = photographed, blue outline = in queue.</p>
+
+        <div className="map-grid-scroll">
+          {allReps.map(rep => {
+            const inQueue = config.selectedReps.includes(rep);
+            const rBase = rep * 100;
+            return (
+              <div key={rep} className="map-rep-row">
+                <div className={`map-rep-label ${inQueue ? '' : 'map-rep-outside'}`}>
+                  Rep {rep}{!inQueue && ' (outside queue)'}
+                </div>
+                <div className="map-plot-grid">
+                  {Array.from({ length: config.totalTreatments }, (_, i) => {
+                    const plot = rBase + i + 1;
+                    const trt = config.plotTreatmentMap[plot];
+                    const taken = photographedKeys.has(`${rep}-${plot}`);
+                    const queued = queueKeys.has(`${rep}-${plot}`);
+                    return (
+                      <button
+                        key={plot}
+                        className={`map-plot ${taken ? 'taken' : ''} ${queued && !taken ? 'queued' : ''}`}
+                        onClick={() => onPlotTap(rep, plot)}
+                      >
+                        <div className="map-plot-num">{plot}</div>
+                        {trt != null && <div className="map-plot-trt">T{trt}</div>}
+                        {taken && <div className="map-plot-check">✓</div>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {mapSidePick && (
+          <div className="map-side-overlay" onClick={onCancelSidePick}>
+            <div className="map-side-modal" onClick={(e) => e.stopPropagation()}>
+              <h3 className="title" style={{ fontSize: 20, marginBottom: 6 }}>Plot {mapSidePick.plot}</h3>
+              <p className="subtitle" style={{ marginBottom: 20 }}>Front or Back?</p>
+              <button className="btn-primary" style={{ marginBottom: 10 }} onClick={() => onSidePick('Front')}>Front</button>
+              <button className="btn-warning" onClick={() => onSidePick('Back')}>Back</button>
+              <button className="btn-secondary" style={{ marginTop: 10 }} onClick={onCancelSidePick}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── MAIN APP COMPONENT ─────────────────────────────────────────────
 
 export default function PhotoBooth() {
@@ -69,6 +132,9 @@ export default function PhotoBooth() {
   const [armParseStatus, setArmParseStatus] = useState(null);
   const [retakeMode, setRetakeMode] = useState(false);
   const [savingProgress, setSavingProgress] = useState(null);
+  const [showMap, setShowMap] = useState(false);
+  const [mapShot, setMapShot] = useState(null);
+  const [mapSidePick, setMapSidePick] = useState(null); // pending plot/rep awaiting side choice
 
   const fileInputRef = useRef(null);
   const armFileRef = useRef(null);
@@ -110,6 +176,27 @@ export default function PhotoBooth() {
     if (!file) return;
 
     const url = URL.createObjectURL(file);
+
+    // Map-tapped photo path
+    if (mapShot) {
+      const newPhoto = {
+        file,
+        url,
+        fileName: mapShot.fileName,
+        label: mapShot.label,
+        rep: mapShot.rep,
+        plot: mapShot.plot,
+        side: mapShot.side,
+        treatment: mapShot.treatment,
+        index: `map-${Date.now()}`,
+        fromMap: true,
+      };
+      setPhotos(prev => [...prev, newPhoto]);
+      setMapShot(null);
+      // Stay on map so they can take more
+      return;
+    }
+
     const newPhoto = {
       file,
       url,
@@ -129,7 +216,33 @@ export default function PhotoBooth() {
       setPhotos(prev => [...prev, newPhoto]);
     }
     setShowNoteInput(true);
-  }, [currentShot, currentIndex, retakeMode]);
+  }, [currentShot, currentIndex, retakeMode, mapShot]);
+
+  // ─── MAP PHOTO ─────────────────────────────────────────────────────
+  const startMapPhoto = useCallback((rep, plot, side = null) => {
+    const trt = config.plotTreatmentMap[plot];
+    const trtSuffix = trt != null ? `_Trt${trt}` : '';
+    const sideSuffix = side ? `_${side}` : '';
+    const fileName = `${sanitizeFileName(config.trialNumber)}_Rep${rep}_Plot${plot}${trtSuffix}${sideSuffix}.jpg`;
+    const label = side ? `Plot ${plot} - ${side.toUpperCase()}` : `Plot ${plot}`;
+    setMapShot({
+      rep, plot, side, treatment: trt ?? null,
+      fileName, label,
+      trtLabel: trt != null ? `Treatment ${trt}` : null,
+    });
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  }, [config.trialNumber, config.plotTreatmentMap]);
+
+  const handleMapPlotTap = useCallback((rep, plot) => {
+    if (config.needFrontBack) {
+      setMapSidePick({ rep, plot });
+    } else {
+      startMapPhoto(rep, plot, null);
+    }
+  }, [config.needFrontBack, startMapPhoto]);
 
   // ─── NAVIGATION ─────────────────────────────────────────────────────
   const advanceToNext = useCallback(() => {
@@ -561,12 +674,16 @@ export default function PhotoBooth() {
     }
 
     return (
+      <>
       <div className="shooting-page">
         {cameraInput}
         <div>
           <div className="shooting-topbar">
             <span className="muted">{currentIndex + 1} of {shootingQueue.length}</span>
-            <span className="muted">Rep {currentShot.rep} - {repDone + 1}/{repTotal}</span>
+            <div className="topbar-right">
+              <span className="muted">Rep {currentShot.rep} - {repDone + 1}/{repTotal}</span>
+              <button className="map-btn" onClick={() => setShowMap(true)} aria-label="Open trial map">🗺️</button>
+            </div>
           </div>
           <div className="progress-bar-bg"><div className="progress-bar-fill" style={{ width: `${progress}%` }} /></div>
         </div>
@@ -606,6 +723,23 @@ export default function PhotoBooth() {
           }}>Stop Early</button>
         </div>
       </div>
+      {showMap && (
+        <MapView
+          config={config}
+          photos={photos}
+          shootingQueue={shootingQueue}
+          onClose={() => setShowMap(false)}
+          onPlotTap={handleMapPlotTap}
+          mapSidePick={mapSidePick}
+          onSidePick={(side) => {
+            const { rep, plot } = mapSidePick;
+            setMapSidePick(null);
+            startMapPhoto(rep, plot, side);
+          }}
+          onCancelSidePick={() => setMapSidePick(null)}
+        />
+      )}
+      </>
     );
   }
 
