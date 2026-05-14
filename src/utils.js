@@ -44,10 +44,26 @@ export function parseManualEntry(text) {
   return mapping;
 }
 
+// ─── PATTERN -> DIRECTIONS PER REP ─────────────────────────────────
+// pattern values:
+//   'serpentine_asc'  - rep 1 ascending, rep 2 descending, rep 3 ascending, ...
+//   'serpentine_desc' - rep 1 descending, rep 2 ascending, rep 3 descending, ...
+export function directionsFromPattern(pattern, selectedReps) {
+  const dirs = {};
+  const startAsc = pattern === 'serpentine_asc';
+  selectedReps.forEach((rep, idx) => {
+    const isAsc = (idx % 2 === 0) ? startAsc : !startAsc;
+    dirs[rep] = isAsc ? 'asc' : 'desc';
+  });
+  return dirs;
+}
+
 // ─── SHOOTING QUEUE BUILDER ────────────────────────────────────────
 export function buildShootingQueue(config) {
   const queue = [];
-  const { trialNumber, selectedReps, totalTreatments, needFrontBack, directions, plotTreatmentMap } = config;
+  const { trialNumber, selectedReps, totalTreatments, photosPerPlot, pattern, plotTreatmentMap } = config;
+  const perPlot = Math.max(1, photosPerPlot || 1);
+  const directions = directionsFromPattern(pattern, selectedReps);
 
   for (let i = 0; i < selectedReps.length; i++) {
     const repNum = selectedReps[i];
@@ -61,36 +77,18 @@ export function buildShootingQueue(config) {
       for (let t = totalTreatments; t >= 1; t--) plots.push(repBase + t);
     }
 
-    // Front photos (or only photos if no front/back)
     for (const plot of plots) {
       const trt = plotTreatmentMap[plot];
       const trtSuffix = trt != null ? `_Trt${trt}` : '';
-      queue.push({
-        rep: repNum,
-        plot,
-        treatment: trt ?? null,
-        side: needFrontBack ? 'Front' : null,
-        fileName: needFrontBack
-          ? `${trialNumber}_Rep${repNum}_Plot${plot}${trtSuffix}_Front.jpg`
-          : `${trialNumber}_Rep${repNum}_Plot${plot}${trtSuffix}.jpg`,
-        label: needFrontBack ? `Plot ${plot} — FRONT` : `Plot ${plot}`,
-        trtLabel: trt != null ? `Treatment ${trt}` : null,
-      });
-    }
-
-    // Back photos — reversed direction
-    if (needFrontBack) {
-      const reversedPlots = [...plots].reverse();
-      for (const plot of reversedPlots) {
-        const trt = plotTreatmentMap[plot];
-        const trtSuffix = trt != null ? `_Trt${trt}` : '';
+      for (let n = 1; n <= perPlot; n++) {
         queue.push({
           rep: repNum,
           plot,
           treatment: trt ?? null,
-          side: 'Back',
-          fileName: `${trialNumber}_Rep${repNum}_Plot${plot}${trtSuffix}_Back.jpg`,
-          label: `Plot ${plot} — BACK`,
+          photoNum: n,
+          totalPhotos: perPlot,
+          fileName: `${trialNumber}_Plot${plot}${trtSuffix}_${n}.jpg`,
+          label: perPlot > 1 ? `Plot ${plot} — Photo ${n} of ${perPlot}` : `Plot ${plot}`,
           trtLabel: trt != null ? `Treatment ${trt}` : null,
         });
       }

@@ -8,7 +8,7 @@ function sanitizeFileName(name) {
 
 const STEPS = {
   HOME: 'home', TRIAL: 'trial', REPS: 'reps', TREATMENTS: 'treatments',
-  SELECT_REPS: 'selectReps', FRONT_BACK: 'frontBack', DIRECTIONS: 'directions',
+  SELECT_REPS: 'selectReps', PHOTOS_PER_PLOT: 'photosPerPlot', PATTERN: 'pattern',
   ARM_IMPORT: 'armImport', SAVE_SETUP: 'saveSetup', SHOOTING: 'shooting',
   REVIEW: 'review', COMPLETE: 'complete',
 };
@@ -49,9 +49,13 @@ function NavButtons({ onBack, onNext, nextLabel, nextDisabled, nextClass }) {
   );
 }
 
-function MapView({ config, photos, shootingQueue, onClose, onPlotTap, mapSidePick, onSidePick, onCancelSidePick }) {
+function MapView({ config, photos, shootingQueue, onClose, onPlotTap }) {
   const allReps = Array.from({ length: config.totalReps }, (_, i) => i + 1);
-  const photographedKeys = new Set(photos.map(p => `${p.rep}-${p.plot}`));
+  // Count photos per plot for badge
+  const countByPlot = photos.reduce((acc, p) => {
+    acc[p.plot] = (acc[p.plot] || 0) + 1;
+    return acc;
+  }, {});
   const queueKeys = new Set(shootingQueue.map(s => `${s.rep}-${s.plot}`));
 
   return (
@@ -76,7 +80,8 @@ function MapView({ config, photos, shootingQueue, onClose, onPlotTap, mapSidePic
                   {Array.from({ length: config.totalTreatments }, (_, i) => {
                     const plot = rBase + i + 1;
                     const trt = config.plotTreatmentMap[plot];
-                    const taken = photographedKeys.has(`${rep}-${plot}`);
+                    const count = countByPlot[plot] || 0;
+                    const taken = count > 0;
                     const queued = queueKeys.has(`${rep}-${plot}`);
                     return (
                       <button
@@ -86,7 +91,7 @@ function MapView({ config, photos, shootingQueue, onClose, onPlotTap, mapSidePic
                       >
                         <div className="map-plot-num">{plot}</div>
                         {trt != null && <div className="map-plot-trt">T{trt}</div>}
-                        {taken && <div className="map-plot-check">✓</div>}
+                        {taken && <div className="map-plot-check">{count > 1 ? `×${count}` : '✓'}</div>}
                       </button>
                     );
                   })}
@@ -95,18 +100,6 @@ function MapView({ config, photos, shootingQueue, onClose, onPlotTap, mapSidePic
             );
           })}
         </div>
-
-        {mapSidePick && (
-          <div className="map-side-overlay" onClick={onCancelSidePick}>
-            <div className="map-side-modal" onClick={(e) => e.stopPropagation()}>
-              <h3 className="title" style={{ fontSize: 20, marginBottom: 6 }}>Plot {mapSidePick.plot}</h3>
-              <p className="subtitle" style={{ marginBottom: 20 }}>Front or Back?</p>
-              <button className="btn-primary" style={{ marginBottom: 10 }} onClick={() => onSidePick('Front')}>Front</button>
-              <button className="btn-warning" onClick={() => onSidePick('Back')}>Back</button>
-              <button className="btn-secondary" style={{ marginTop: 10 }} onClick={onCancelSidePick}>Cancel</button>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -118,14 +111,13 @@ export default function PhotoBooth() {
   const [step, setStep] = useState(STEPS.HOME);
   const [config, setConfig] = useState({
     trialNumber: '', totalReps: 3, totalTreatments: 10, selectedReps: [],
-    needFrontBack: false, directions: {}, plotTreatmentMap: {}, armLoaded: false,
+    photosPerPlot: 1, pattern: 'serpentine_asc', plotTreatmentMap: {}, armLoaded: false,
   });
   const [shootingQueue, setShootingQueue] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [photos, setPhotos] = useState([]);
   const [skippedPlots, setSkippedPlots] = useState([]);
   const [notes, setNotes] = useState({});
-  const [dirStep, setDirStep] = useState(0);
   const [showNoteInput, setShowNoteInput] = useState(false);
   const [currentNote, setCurrentNote] = useState('');
   const [armText, setArmText] = useState('');
@@ -134,7 +126,6 @@ export default function PhotoBooth() {
   const [savingProgress, setSavingProgress] = useState(null);
   const [showMap, setShowMap] = useState(false);
   const [mapShot, setMapShot] = useState(null);
-  const [mapSidePick, setMapSidePick] = useState(null); // pending plot/rep awaiting side choice
 
   const fileInputRef = useRef(null);
   const armFileRef = useRef(null);
@@ -155,9 +146,12 @@ export default function PhotoBooth() {
 
   useEffect(() => {
     if (step === STEPS.SHOOTING && currentShot && !showNoteInput && !retakeMode) {
+      // Only announce on the first photo of a plot to avoid spam during multi-photo
+      const isFirstOfPlot = currentShot.photoNum === 1 || currentShot.photoNum == null;
+      if (!isFirstOfPlot) return;
       const label = currentShot.trtLabel
-        ? `${currentShot.label}, ${currentShot.trtLabel}`
-        : currentShot.label;
+        ? `Plot ${currentShot.plot}, ${currentShot.trtLabel}`
+        : `Plot ${currentShot.plot}`;
       const timer = setTimeout(() => speak(label), 300);
       return () => clearTimeout(timer);
     }
@@ -186,7 +180,7 @@ export default function PhotoBooth() {
         label: mapShot.label,
         rep: mapShot.rep,
         plot: mapShot.plot,
-        side: mapShot.side,
+        photoNum: mapShot.photoNum,
         treatment: mapShot.treatment,
         index: `map-${Date.now()}`,
         fromMap: true,
@@ -204,7 +198,7 @@ export default function PhotoBooth() {
       label: currentShot.label,
       rep: currentShot.rep,
       plot: currentShot.plot,
-      side: currentShot.side,
+      photoNum: currentShot.photoNum,
       treatment: currentShot.treatment,
       index: currentIndex,
     };
@@ -212,37 +206,49 @@ export default function PhotoBooth() {
     if (retakeMode) {
       setPhotos(prev => prev.map(p => p.index === currentIndex ? newPhoto : p));
       setRetakeMode(false);
+      setShowNoteInput(true);
     } else {
       setPhotos(prev => [...prev, newPhoto]);
+      // Auto-advance for multi-photo: skip note input until last photo of plot
+      const isLastOfPlot = currentShot.photoNum === currentShot.totalPhotos;
+      if (isLastOfPlot) {
+        setShowNoteInput(true);
+      } else {
+        // Auto-advance to next photo of same plot
+        if (currentIndex + 1 < shootingQueue.length) {
+          setCurrentIndex(prev => prev + 1);
+        } else {
+          setStep(STEPS.REVIEW);
+        }
+      }
     }
-    setShowNoteInput(true);
-  }, [currentShot, currentIndex, retakeMode, mapShot]);
+  }, [currentShot, currentIndex, retakeMode, mapShot, shootingQueue.length]);
 
   // ─── MAP PHOTO ─────────────────────────────────────────────────────
-  const startMapPhoto = useCallback((rep, plot, side = null) => {
+  // Each map tap takes one extra photo. Use highest existing photo number for that plot + 1.
+  const handleMapPlotTap = useCallback((rep, plot) => {
     const trt = config.plotTreatmentMap[plot];
     const trtSuffix = trt != null ? `_Trt${trt}` : '';
-    const sideSuffix = side ? `_${side}` : '';
-    const fileName = `${sanitizeFileName(config.trialNumber)}_Rep${rep}_Plot${plot}${trtSuffix}${sideSuffix}.jpg`;
-    const label = side ? `Plot ${plot} - ${side.toUpperCase()}` : `Plot ${plot}`;
+    const safeTrial = sanitizeFileName(config.trialNumber);
+    // Find highest existing photo number for this plot
+    const existing = photos.filter(p => p.plot === plot);
+    let nextNum = existing.length + 1;
+    // Check uniqueness in case of retakes/skips
+    const used = new Set(existing.map(p => p.photoNum).filter(n => n != null));
+    while (used.has(nextNum)) nextNum++;
+    const fileName = `${safeTrial}_Plot${plot}${trtSuffix}_${nextNum}.jpg`;
     setMapShot({
-      rep, plot, side, treatment: trt ?? null,
-      fileName, label,
+      rep, plot, treatment: trt ?? null,
+      photoNum: nextNum,
+      fileName,
+      label: `Plot ${plot} — Extra ${nextNum}`,
       trtLabel: trt != null ? `Treatment ${trt}` : null,
     });
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
       fileInputRef.current.click();
     }
-  }, [config.trialNumber, config.plotTreatmentMap]);
-
-  const handleMapPlotTap = useCallback((rep, plot) => {
-    if (config.needFrontBack) {
-      setMapSidePick({ rep, plot });
-    } else {
-      startMapPhoto(rep, plot, null);
-    }
-  }, [config.needFrontBack, startMapPhoto]);
+  }, [config.trialNumber, config.plotTreatmentMap, photos]);
 
   // ─── NAVIGATION ─────────────────────────────────────────────────────
   const advanceToNext = useCallback(() => {
@@ -298,11 +304,11 @@ export default function PhotoBooth() {
 
       const noteKeys = Object.keys(notes);
       if (noteKeys.length > 0) {
-        const rows = ['Plot,Rep,Treatment,Side,Note,FileName'];
+        const rows = ['Plot,Rep,Treatment,PhotoNum,Note,FileName'];
         noteKeys.forEach(idx => {
           const shot = shootingQueue[parseInt(idx)];
           if (shot) {
-            rows.push(`${shot.plot},${shot.rep},${shot.treatment || ''},${shot.side || ''},${JSON.stringify(notes[idx])},${shot.fileName}`);
+            rows.push(`${shot.plot},${shot.rep},${shot.treatment || ''},${shot.photoNum || ''},${JSON.stringify(notes[idx])},${shot.fileName}`);
           }
         });
         folder.file(`${safeTrial}_notes.csv`, rows.join('\n'));
@@ -395,10 +401,10 @@ export default function PhotoBooth() {
     setStep(STEPS.HOME);
     setConfig({
       trialNumber: '', totalReps: 3, totalTreatments: 10, selectedReps: [],
-      needFrontBack: false, directions: {}, plotTreatmentMap: {}, armLoaded: false,
+      photosPerPlot: 1, pattern: 'serpentine_asc', plotTreatmentMap: {}, armLoaded: false,
     });
     setShootingQueue([]); setCurrentIndex(0); setPhotos([]); setSkippedPlots([]);
-    setNotes({}); setDirStep(0); setShowNoteInput(false); setCurrentNote('');
+    setNotes({}); setShowNoteInput(false); setCurrentNote('');
     setArmText(''); setArmParseStatus(null); setRetakeMode(false); setSavingProgress(null);
   };
 
@@ -516,57 +522,55 @@ export default function PhotoBooth() {
               );
             })}
           </div>
-          <NavButtons onBack={() => setStep(STEPS.TREATMENTS)} onNext={() => setStep(STEPS.FRONT_BACK)}
+          <NavButtons onBack={() => setStep(STEPS.TREATMENTS)} onNext={() => setStep(STEPS.PHOTOS_PER_PLOT)}
             nextDisabled={config.selectedReps.length === 0} />
         </div>
       </div>
     );
   }
 
-  if (step === STEPS.FRONT_BACK) {
+  if (step === STEPS.PHOTOS_PER_PLOT) {
     return (
       <div className="page">
         <div className="card">
           <span className="step-label">Step 5 of 8</span>
-          <h2 className="title">Front & Back?</h2>
-          <p className="subtitle">Do you need front AND back photos of each plot?</p>
-          <OptionButton selected={config.needFrontBack === true} title="Yes - Front & Back"
-            desc="All fronts first, then backs (reversed)" onPress={() => setConfig({ ...config, needFrontBack: true })} />
-          <OptionButton selected={config.needFrontBack === false} title="No - One photo per plot"
-            desc="Single photo of each plot" onPress={() => setConfig({ ...config, needFrontBack: false })} />
-          <NavButtons onBack={() => setStep(STEPS.SELECT_REPS)}
-            onNext={() => { setDirStep(0); setStep(STEPS.DIRECTIONS); }} />
+          <h2 className="title">Photos per Plot</h2>
+          <p className="subtitle">How many photos do you want to take of each plot?</p>
+          <NumberStepper value={config.photosPerPlot} onChange={v => setConfig({ ...config, photosPerPlot: v })} />
+          <NavButtons onBack={() => setStep(STEPS.SELECT_REPS)} onNext={() => setStep(STEPS.PATTERN)} />
         </div>
       </div>
     );
   }
 
-  if (step === STEPS.DIRECTIONS) {
-    const cRep = config.selectedReps[dirStep];
-    const cDir = config.directions[cRep];
-    const rBase = cRep * 100;
-    const setDir = d => setConfig(prev => ({ ...prev, directions: { ...prev.directions, [cRep]: d } }));
-    const goNext = () => {
-      if (!cDir) return;
-      if (dirStep + 1 < config.selectedReps.length) setDirStep(dirStep + 1);
-      else setStep(STEPS.ARM_IMPORT);
-    };
-    const goBack = () => { if (dirStep > 0) setDirStep(dirStep - 1); else setStep(STEPS.FRONT_BACK); };
-
+  if (step === STEPS.PATTERN) {
+    const firstRep = config.selectedReps[0] ?? 1;
+    const lastTrt = config.totalTreatments;
+    const exAsc = `${firstRep}01 → ${firstRep}${String(lastTrt).padStart(2, '0')}`;
+    const exDesc = `${firstRep}${String(lastTrt).padStart(2, '0')} → ${firstRep}01`;
     return (
       <div className="page">
         <div className="card">
-          <span className="step-label">Step 6 of 8 - Rep {cRep} ({dirStep + 1}/{config.selectedReps.length})</span>
-          <h2 className="title">Direction</h2>
-          <p className="subtitle">Which way for Rep {cRep}?</p>
-          <OptionButton selected={cDir === 'asc'} title="Left to Right"
-            desc={`${rBase + 1} > ${rBase + 2} > ... > ${rBase + config.totalTreatments}`}
-            onPress={() => setDir('asc')} />
-          <OptionButton selected={cDir === 'desc'} title="Right to Left"
-            desc={`${rBase + config.totalTreatments} > ... > ${rBase + 1}`}
-            onPress={() => setDir('desc')} />
-          <NavButtons onBack={goBack} onNext={goNext} nextDisabled={!cDir}
-            nextLabel={dirStep + 1 < config.selectedReps.length ? 'Next Rep' : 'Next'} />
+          <span className="step-label">Step 6 of 8</span>
+          <h2 className="title">Walking Pattern</h2>
+          <p className="subtitle">How will you walk through the trial?</p>
+          <OptionButton
+            selected={config.pattern === 'serpentine_asc'}
+            title="Serpentine — start ascending"
+            desc={`Rep 1 ascending (${exAsc}), then Rep 2 reversed, alternating`}
+            onPress={() => setConfig({ ...config, pattern: 'serpentine_asc' })}
+          />
+          <OptionButton
+            selected={config.pattern === 'serpentine_desc'}
+            title="Serpentine — start descending"
+            desc={`Rep 1 descending (${exDesc}), then Rep 2 reversed, alternating`}
+            onPress={() => setConfig({ ...config, pattern: 'serpentine_desc' })}
+          />
+          <NavButtons
+            onBack={() => setStep(STEPS.PHOTOS_PER_PLOT)}
+            onNext={() => setStep(STEPS.ARM_IMPORT)}
+            nextDisabled={!config.pattern}
+          />
         </div>
       </div>
     );
@@ -614,7 +618,7 @@ export default function PhotoBooth() {
           )}
 
           <NavButtons
-            onBack={() => { setDirStep(config.selectedReps.length - 1); setStep(STEPS.DIRECTIONS); }}
+            onBack={() => setStep(STEPS.PATTERN)}
             onNext={() => setStep(STEPS.SAVE_SETUP)}
             nextLabel={mapC > 0 ? 'Next' : 'Skip - No Mapping'} />
         </div>
@@ -636,7 +640,8 @@ export default function PhotoBooth() {
             <div className="summary-row"><span className="summary-key">Trial: </span><span>{config.trialNumber}</span></div>
             <div className="summary-row"><span className="summary-key">Reps: </span><span>{config.selectedReps.map(r => `Rep ${r}`).join(', ')}</span></div>
             <div className="summary-row"><span className="summary-key">Treatments: </span><span>{config.totalTreatments} per rep</span></div>
-            <div className="summary-row"><span className="summary-key">Front/Back: </span><span>{config.needFrontBack ? 'Yes' : 'No'}</span></div>
+            <div className="summary-row"><span className="summary-key">Photos per plot: </span><span>{config.photosPerPlot}</span></div>
+            <div className="summary-row"><span className="summary-key">Pattern: </span><span>{config.pattern === 'serpentine_asc' ? 'Serpentine (start asc)' : 'Serpentine (start desc)'}</span></div>
             {mapC > 0 && <div className="summary-row"><span className="summary-key">ARM: </span><span>{mapC} plots mapped</span></div>}
             <p className="summary-total">📷 {totalPhotos} total photos</p>
           </div>
@@ -649,7 +654,6 @@ export default function PhotoBooth() {
 
   if (step === STEPS.SHOOTING && currentShot) {
     const isNewRep = currentIndex === 0 || shootingQueue[currentIndex - 1]?.rep !== currentShot.rep;
-    const isBackStart = currentIndex > 0 && currentShot.side === 'Back' && shootingQueue[currentIndex - 1]?.side === 'Front';
     const repDone = shootingQueue.slice(0, currentIndex).filter(s => s.rep === currentShot.rep).length;
     const repTotal = shootingQueue.filter(s => s.rep === currentShot.rep).length;
 
@@ -689,15 +693,15 @@ export default function PhotoBooth() {
         </div>
 
         <div className="shooting-center">
-          {(isNewRep || isBackStart) && (
-            <div className={`alert-banner ${isBackStart ? 'warning' : 'info'}`}>
-              {isBackStart ? 'Now taking BACK photos (reversed)' : `Starting Rep ${currentShot.rep}`}
+          {isNewRep && (
+            <div className="alert-banner info">
+              Starting Rep {currentShot.rep}
             </div>
           )}
           {retakeMode && <div className="alert-banner error">Retaking - replaces previous photo</div>}
           <h1 className="plot-label">Plot {currentShot.plot}</h1>
-          {currentShot.side && (
-            <div className={`side-badge ${currentShot.side === 'Front' ? 'front' : 'back'}`}>{currentShot.side}</div>
+          {currentShot.totalPhotos > 1 && (
+            <div className="photo-num-badge">Photo {currentShot.photoNum} of {currentShot.totalPhotos}</div>
           )}
           {currentShot.trtLabel && <div className="trt-badge">{currentShot.trtLabel}</div>}
           <p className="file-name">{currentShot.fileName}</p>
@@ -730,13 +734,6 @@ export default function PhotoBooth() {
           shootingQueue={shootingQueue}
           onClose={() => setShowMap(false)}
           onPlotTap={handleMapPlotTap}
-          mapSidePick={mapSidePick}
-          onSidePick={(side) => {
-            const { rep, plot } = mapSidePick;
-            setMapSidePick(null);
-            startMapPhoto(rep, plot, side);
-          }}
-          onCancelSidePick={() => setMapSidePick(null)}
         />
       )}
       </>
@@ -746,8 +743,8 @@ export default function PhotoBooth() {
   if (step === STEPS.REVIEW) {
     const noteCount = Object.keys(notes).length;
     return (
-      <div className="page" style={{ paddingTop: 60 }}>
-        <div className="card wide" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+      <div className="review-page">
+        <div className="review-card">
           <h2 className="title">Review & Export</h2>
           <p className="subtitle">
             {photos.length} photos{skippedPlots.length > 0 ? `, ${skippedPlots.length} skipped` : ''}
@@ -767,7 +764,7 @@ export default function PhotoBooth() {
               return (
                 <div key={i} className="review-item" onClick={() => shareOnePhoto(photo)}>
                   <img src={photo.url} className="review-thumb" alt="" />
-                  <div style={{ flex: 1 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <p className="review-label">{photo.label}</p>
                     {photo.treatment != null && <p className="review-trt">Treatment {photo.treatment}</p>}
                     <p className="review-filename">{photo.fileName}</p>
@@ -780,10 +777,10 @@ export default function PhotoBooth() {
           </div>
 
           {!savingProgress && (
-            <button className="btn-success" onClick={exportAllPhotos}>Export All to Files ({photos.length})</button>
-          )}
-          {!savingProgress && (
-            <button className="btn-primary" style={{ marginTop: 12 }} onClick={() => setStep(STEPS.COMPLETE)}>Done</button>
+            <div className="review-buttons">
+              <button className="btn-success" onClick={exportAllPhotos}>Export All to Files ({photos.length})</button>
+              <button className="btn-primary" style={{ marginTop: 12 }} onClick={() => setStep(STEPS.COMPLETE)}>Done</button>
+            </div>
           )}
         </div>
       </div>

@@ -108,6 +108,7 @@ button:disabled { opacity: 0.4; cursor: default; }
 .side-badge.front { background: var(--blue-bg); color: var(--blue-light); }
 .side-badge.back { background: var(--yellow-bg); color: var(--yellow); }
 .trt-badge { padding: 6px 18px; border-radius: 100px; background: var(--purple-bg); border: 1px solid var(--purple-border); color: var(--purple-light); font-size: 16px; font-weight: 600; margin-top: 12px; }
+.photo-num-badge { padding: 6px 18px; border-radius: 100px; background: var(--blue-bg); border: 1px solid var(--blue-border); color: var(--blue-light); font-size: 16px; font-weight: 600; margin-top: 12px; }
 .file-name { font-size: 12px; color: var(--text-faint); text-align: center; margin-top: 16px; font-family: 'Menlo', monospace; }
 
 /* Alert Banner */
@@ -118,7 +119,10 @@ button:disabled { opacity: 0.4; cursor: default; }
 .alert-banner.error { background: var(--red-bg); border-color: var(--red-border); color: var(--red-light); }
 
 /* Review */
-.review-list { flex: 1; overflow-y: auto; margin-bottom: 16px; }
+.review-page { display: flex; flex-direction: column; height: 100vh; max-height: 100vh; padding: 60px 16px 24px; background: var(--bg); align-items: center; }
+.review-card { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--card); border-radius: 20px; border: 1px solid var(--card-border); padding: 28px; width: 100%; max-width: 460px; }
+.review-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; margin-bottom: 16px; }
+.review-buttons { flex-shrink: 0; }
 .review-item { display: flex; align-items: center; gap: 12px; padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); cursor: pointer; }
 .review-thumb { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; }
 .review-label { font-size: 14px; font-weight: 600; color: var(--text); }
@@ -135,7 +139,7 @@ button:disabled { opacity: 0.4; cursor: default; }
 
 /* Safe area for notch */
 @supports (padding-top: env(safe-area-inset-top)) {
-  .page, .shooting-page { padding-top: calc(env(safe-area-inset-top) + 20px); padding-bottom: calc(env(safe-area-inset-bottom) + 16px); }
+  .page, .shooting-page, .review-page { padding-top: calc(env(safe-area-inset-top) + 20px); padding-bottom: calc(env(safe-area-inset-bottom) + 16px); }
 }
 
 /* Map button in topbar */
