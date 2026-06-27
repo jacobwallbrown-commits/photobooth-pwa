@@ -190,6 +190,17 @@ button:disabled { opacity: 0.4; cursor: default; }
 .zoom-img { max-width: 100%; max-height: 100%; object-fit: contain; touch-action: pinch-zoom; }
 .zoom-close { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 16px; width: 44px; height: 44px; border-radius: 22px; background: rgba(255,255,255,0.15); color: white; font-size: 20px; z-index: 301; }
 
+/* How to Use guide */
+.help-body { display: block; }
+.help-section { padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.help-section:last-child { border-bottom: none; }
+.help-h { font-size: 16px; font-weight: 800; color: var(--text); margin-bottom: 6px; }
+.help-p { font-size: 14px; line-height: 1.5; color: var(--text-muted); margin-bottom: 8px; }
+.help-p:last-child { margin-bottom: 0; }
+.help-p b { color: var(--text); font-weight: 700; }
+.help-highlight { background: var(--green-bg); border: 1px solid var(--green-border); border-radius: 12px; padding: 14px; margin: 6px 0; }
+.help-highlight .help-h { color: var(--green-light); }
+
 /* Custom direction step */
 .custom-dir-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 8px; max-height: 50vh; overflow-y: auto; }
 .custom-dir-row { display: flex; flex-direction: column; gap: 6px; }

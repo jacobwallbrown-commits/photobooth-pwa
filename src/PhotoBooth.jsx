@@ -8,7 +8,7 @@ function sanitizeFileName(name) {
 }
 
 const STEPS = {
-  HOME: 'home', TRIAL: 'trial', REPS: 'reps', TREATMENTS: 'treatments',
+  HOME: 'home', HELP: 'help', TRIAL: 'trial', REPS: 'reps', TREATMENTS: 'treatments',
   SELECT_REPS: 'selectReps', PHOTOS_PER_PLOT: 'photosPerPlot', PATTERN: 'pattern',
   CUSTOM_DIR: 'customDir', ARM_IMPORT: 'armImport', SAVE_SETUP: 'saveSetup',
   SHOOTING: 'shooting', REVIEW: 'review', COMPLETE: 'complete',
@@ -631,7 +631,84 @@ export default function PhotoBooth() {
 
         <div className="card">
           <button className="btn-primary" onClick={() => setStep(STEPS.TRIAL)}>{resumeInfo ? 'Start New Session' : 'Manual Mode'}</button>
+          <button className="btn-secondary" style={{ marginTop: 12 }} onClick={() => setStep(STEPS.HELP)}>📖 How to Use</button>
           <p className="hint">Configure trial &rarr; auto-label &rarr; shoot</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (step === STEPS.HELP) {
+    return (
+      <div className="review-page">
+        <div className="review-card">
+          <h2 className="title">How to Use</h2>
+          <p className="subtitle">From setup to saving your photos</p>
+          <div className="review-list help-body">
+
+            <div className="help-section">
+              <h3 className="help-h">📲 First time: add to your home screen</h3>
+              <p className="help-p">In Safari, tap the <b>Share</b> button, then <b>Add to Home Screen</b>. The app opens full-screen and works in the field even with no signal. Your photos are saved on the phone as you go.</p>
+            </div>
+
+            <div className="help-section">
+              <h3 className="help-h">1 · Start a session</h3>
+              <p className="help-p">Tap <b>Manual Mode</b>. If you left a session unfinished, a green <b>Resume</b> card appears instead — tap it to pick up exactly where you stopped.</p>
+            </div>
+
+            <div className="help-section">
+              <h3 className="help-h">2 · Set up the trial (8 quick steps)</h3>
+              <p className="help-p">
+                <b>Trial name</b> → <b>Number of reps</b> → <b>Treatments per rep</b> → <b>Select reps</b> to shoot →
+                <b> Photos per plot</b> (1, 2, 3…) → <b>Walking pattern</b> (serpentine, all-ascending, all-descending, or custom per rep) →
+                <b> ARM map</b> (optional — paste or upload a plot=treatment list so file names include the treatment) →
+                <b> Ready to Shoot</b>.
+              </p>
+              <p className="help-p">On the last step you can also <b>attach a photo of your trial map</b> for reference (optional).</p>
+            </div>
+
+            <div className="help-section">
+              <h3 className="help-h">3 · Take photos</h3>
+              <p className="help-p">The big plot number and file name are shown. Tap <b>Take Photo</b> — your camera opens, snap the picture, and it auto-saves. If you set more than one photo per plot, it stays on the same plot until you've taken them all, then moves on.</p>
+              <p className="help-p">The app reads each plot number aloud so you can keep your eyes on the field.</p>
+            </div>
+
+            <div className="help-section">
+              <h3 className="help-h">4 · Notes, skip & retake</h3>
+              <p className="help-p">After a plot's photos, you can add an optional <b>note</b>. Use <b>Skip Plot</b> if you're not shooting one, or <b>Retake This Photo</b> to redo the last shot.</p>
+            </div>
+
+            <div className="help-section">
+              <h3 className="help-h">5 · Trial map button 🗺️</h3>
+              <p className="help-p">Tap the map icon (top-right while shooting) to see every plot. <b>Tap any plot</b> — even one outside your selected reps — to grab an extra photo of it. Green plots are done; the count shows how many photos each has. Your attached map photo also appears here, tap to zoom.</p>
+            </div>
+
+            <div className="help-section">
+              <h3 className="help-h">6 · Nothing gets lost</h3>
+              <p className="help-p">Every photo is saved instantly on your phone. If the app closes, the screen locks, or you switch apps, just reopen PhotoBooth and tap <b>Resume</b>.</p>
+            </div>
+
+            <div className="help-section">
+              <h3 className="help-h">7 · Review & check for gaps</h3>
+              <p className="help-p">When you finish (or tap <b>Stop Early</b>), the Review screen lists every photo. If any plots were missed it shows a ⚠️ warning with the plot numbers and a <b>Back to shooting</b> link so you can fill them in.</p>
+            </div>
+
+            <div className="help-section help-highlight">
+              <h3 className="help-h">8 · Save your photos ⭐</h3>
+              <p className="help-p">Tap <b>Export All to Files</b>. The iOS share sheet opens — choose <b>Save to Files</b>, then pick the folder you want (e.g. iCloud Drive or On My iPhone) and tap <b>Save</b>.</p>
+              <p className="help-p">You get one <b>.zip</b> file named after your trial. Inside is a folder with every photo (named by plot &amp; treatment), a <b>notes .csv</b>, and your trial-map photo if you attached one.</p>
+              <p className="help-p"><b>To open the photos:</b> in the Files app, tap the .zip once — iOS unzips it into a folder next to it.</p>
+            </div>
+
+            <div className="help-section">
+              <h3 className="help-h">Tip</h3>
+              <p className="help-p">You can tap <b>Share</b> on any single photo in the Review list to send just that one.</p>
+            </div>
+
+          </div>
+          <div className="review-buttons">
+            <button className="btn-primary" onClick={() => setStep(STEPS.HOME)}>Back to Home</button>
+          </div>
         </div>
       </div>
     );
