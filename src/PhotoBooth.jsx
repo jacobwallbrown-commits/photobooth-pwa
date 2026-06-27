@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import JSZip from 'jszip';
 import { buildShootingQueue, parseARMText, parseManualEntry } from './utils';
+import { makePid, saveMeta, savePhotoBlob, saveMapBlob, peekSession, loadSession, clearSession } from './session';
 
 function sanitizeFileName(name) {
   return name.replace(/[^a-zA-Z0-9_\-. ]/g, '_').replace(/_{2,}/g, '_').trim() || 'Trial';
@@ -9,9 +10,27 @@ function sanitizeFileName(name) {
 const STEPS = {
   HOME: 'home', TRIAL: 'trial', REPS: 'reps', TREATMENTS: 'treatments',
   SELECT_REPS: 'selectReps', PHOTOS_PER_PLOT: 'photosPerPlot', PATTERN: 'pattern',
-  ARM_IMPORT: 'armImport', SAVE_SETUP: 'saveSetup', SHOOTING: 'shooting',
-  REVIEW: 'review', COMPLETE: 'complete',
+  CUSTOM_DIR: 'customDir', ARM_IMPORT: 'armImport', SAVE_SETUP: 'saveSetup',
+  SHOOTING: 'shooting', REVIEW: 'review', COMPLETE: 'complete',
 };
+
+const PATTERN_LABELS = {
+  serpentine_asc: 'Serpentine (start asc)',
+  serpentine_desc: 'Serpentine (start desc)',
+  all_asc: 'All ascending',
+  all_desc: 'All descending',
+  custom: 'Custom per rep',
+};
+
+// Full-screen zoomable image viewer
+function ImageZoom({ url, onClose }) {
+  return (
+    <div className="zoom-overlay" onClick={onClose}>
+      <button className="zoom-close" onClick={onClose} aria-label="Close">✕</button>
+      <img src={url} className="zoom-img" alt="Trial map" onClick={(e) => e.stopPropagation()} />
+    </div>
+  );
+}
 
 // ─── SUB-COMPONENTS ─────────────────────────────────────────────────
 
@@ -49,7 +68,7 @@ function NavButtons({ onBack, onNext, nextLabel, nextDisabled, nextClass }) {
   );
 }
 
-function MapView({ config, photos, shootingQueue, onClose, onPlotTap }) {
+function MapView({ config, photos, shootingQueue, onClose, onPlotTap, mapImage, onAttachMap, onViewMap }) {
   const allReps = Array.from({ length: config.totalReps }, (_, i) => i + 1);
   // Count photos per plot for badge
   const countByPlot = photos.reduce((acc, p) => {
@@ -65,6 +84,22 @@ function MapView({ config, photos, shootingQueue, onClose, onPlotTap }) {
           <h3 className="map-title">Trial Map</h3>
           <button className="map-close" onClick={onClose} aria-label="Close map">✕</button>
         </div>
+
+        {mapImage ? (
+          <div className="map-ref-row">
+            <img src={mapImage.url} className="map-ref-thumb" alt="Trial map reference" onClick={onViewMap} />
+            <div style={{ flex: 1 }}>
+              <p className="map-ref-label">Your trial map</p>
+              <button className="link-blue" onClick={onViewMap}>Tap to view full screen</button>
+              <button className="link-blue" onClick={onAttachMap} style={{ marginTop: 4 }}>Replace</button>
+            </div>
+          </div>
+        ) : (
+          <button className="btn-secondary" style={{ marginBottom: 12, paddingBlock: 12 }} onClick={onAttachMap}>
+            📎 Attach trial map photo
+          </button>
+        )}
+
         <p className="map-hint">Tap any plot to take an extra photo. Green = photographed, blue outline = in queue.</p>
 
         <div className="map-grid-scroll">
@@ -111,7 +146,7 @@ export default function PhotoBooth() {
   const [step, setStep] = useState(STEPS.HOME);
   const [config, setConfig] = useState({
     trialNumber: '', totalReps: 3, totalTreatments: 10, selectedReps: [],
-    photosPerPlot: 1, pattern: 'serpentine_asc', plotTreatmentMap: {}, armLoaded: false,
+    photosPerPlot: 1, pattern: 'serpentine_asc', customDirections: {}, plotTreatmentMap: {}, armLoaded: false,
   });
   const [shootingQueue, setShootingQueue] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -126,12 +161,68 @@ export default function PhotoBooth() {
   const [savingProgress, setSavingProgress] = useState(null);
   const [showMap, setShowMap] = useState(false);
   const [mapShot, setMapShot] = useState(null);
+  const [mapImage, setMapImage] = useState(null);      // { file, url } reference trial-map photo
+  const [viewMapZoom, setViewMapZoom] = useState(false);
+  const [resumeInfo, setResumeInfo] = useState(null);  // summary of a saved session for the Home card
+  const [startedAt, setStartedAt] = useState(null);
 
   const fileInputRef = useRef(null);
   const armFileRef = useRef(null);
+  const mapImageRef = useRef(null);
+  const persistedPids = useRef(new Set());
+  const sessionActive = useRef(false);
 
   const currentShot = shootingQueue[currentIndex];
   const progress = shootingQueue.length > 0 ? (currentIndex / shootingQueue.length) * 100 : 0;
+
+  // ─── SESSION PERSISTENCE ────────────────────────────────────────────
+  // On mount, check for a resumable session.
+  useEffect(() => {
+    peekSession().then(meta => {
+      if (meta && meta.photos && meta.photos.length >= 0 && meta.config) {
+        setResumeInfo({
+          trialNumber: meta.config.trialNumber,
+          photoCount: meta.photos.length,
+          total: meta.totalShots ?? null,
+          startedAt: meta.startedAt,
+        });
+      }
+    });
+  }, []);
+
+  // Auto-save the session whenever key state changes during an active session.
+  useEffect(() => {
+    if (!sessionActive.current) return;
+    if (step !== STEPS.SHOOTING && step !== STEPS.REVIEW) return;
+    const t = setTimeout(async () => {
+      // Persist any new photo blobs
+      for (const p of photos) {
+        if (p.pid && !persistedPids.current.has(p.pid)) {
+          const ok = await savePhotoBlob(p.pid, p.file);
+          if (ok) persistedPids.current.add(p.pid);
+        }
+      }
+      // Persist lightweight meta
+      const meta = {
+        v: 1,
+        config,
+        shootingQueue,
+        currentIndex,
+        notes,
+        skippedPlots,
+        startedAt,
+        totalShots: shootingQueue.length,
+        hasMap: !!mapImage,
+        photos: photos.map(p => ({
+          pid: p.pid, fileName: p.fileName, label: p.label, rep: p.rep,
+          plot: p.plot, photoNum: p.photoNum, treatment: p.treatment,
+          index: p.index, fromMap: !!p.fromMap,
+        })),
+      };
+      saveMeta(meta);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [step, config, shootingQueue, currentIndex, notes, skippedPlots, photos, mapImage, startedAt]);
 
   // ─── TTS ────────────────────────────────────────────────────────────
   const speak = useCallback((text) => {
@@ -174,6 +265,7 @@ export default function PhotoBooth() {
     // Map-tapped photo path
     if (mapShot) {
       const newPhoto = {
+        pid: makePid(),
         file,
         url,
         fileName: mapShot.fileName,
@@ -192,6 +284,7 @@ export default function PhotoBooth() {
     }
 
     const newPhoto = {
+      pid: makePid(),
       file,
       url,
       fileName: currentShot.fileName,
@@ -250,6 +343,55 @@ export default function PhotoBooth() {
     }
   }, [config.trialNumber, config.plotTreatmentMap, photos]);
 
+  // ─── REFERENCE MAP IMAGE ───────────────────────────────────────────
+  const attachMapImage = useCallback(() => {
+    if (mapImageRef.current) {
+      mapImageRef.current.value = '';
+      mapImageRef.current.click();
+    }
+  }, []);
+
+  const handleMapImageSelect = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setMapImage(prev => {
+      if (prev?.url) URL.revokeObjectURL(prev.url);
+      return { file, url: URL.createObjectURL(file) };
+    });
+    if (sessionActive.current) saveMapBlob(file);
+  }, []);
+
+  // ─── RESUME ─────────────────────────────────────────────────────────
+  const resumeSession = useCallback(async () => {
+    const data = await loadSession();
+    if (!data || !data.meta) {
+      setResumeInfo(null);
+      return;
+    }
+    const { meta, photos: loadedPhotos, mapImage: loadedMap } = data;
+    persistedPids.current = new Set(loadedPhotos.map(p => p.pid));
+    setConfig(meta.config);
+    setShootingQueue(meta.shootingQueue || []);
+    setCurrentIndex(meta.currentIndex || 0);
+    setNotes(meta.notes || {});
+    setSkippedPlots(meta.skippedPlots || []);
+    setStartedAt(meta.startedAt || Date.now());
+    setPhotos(loadedPhotos);
+    setMapImage(loadedMap);
+    setShowNoteInput(false);
+    setCurrentNote('');
+    setRetakeMode(false);
+    setResumeInfo(null);
+    sessionActive.current = true;
+    setStep(STEPS.SHOOTING);
+  }, []);
+
+  const discardSavedSession = useCallback(async () => {
+    await clearSession();
+    persistedPids.current = new Set();
+    setResumeInfo(null);
+  }, []);
+
   // ─── NAVIGATION ─────────────────────────────────────────────────────
   const advanceToNext = useCallback(() => {
     if (currentIndex + 1 < shootingQueue.length) {
@@ -274,8 +416,12 @@ export default function PhotoBooth() {
     advanceToNext();
   };
 
-  const startShooting = () => {
+  const startShooting = async () => {
     const queue = buildShootingQueue(config);
+    // Fresh session: wipe any prior saved one
+    await clearSession();
+    persistedPids.current = new Set();
+    if (mapImage) saveMapBlob(mapImage.file);
     setShootingQueue(queue);
     setCurrentIndex(0);
     setPhotos([]);
@@ -284,6 +430,8 @@ export default function PhotoBooth() {
     setShowNoteInput(false);
     setCurrentNote('');
     setRetakeMode(false);
+    setStartedAt(Date.now());
+    sessionActive.current = true;
     setStep(STEPS.SHOOTING);
   };
 
@@ -314,6 +462,13 @@ export default function PhotoBooth() {
         folder.file(`${safeTrial}_notes.csv`, rows.join('\n'));
       }
 
+      // Include the reference trial-map photo if attached
+      if (mapImage?.file) {
+        const ext = (mapImage.file.type && mapImage.file.type.split('/')[1]) || 'jpg';
+        const mapBuf = await mapImage.file.arrayBuffer();
+        folder.file(`${safeTrial}_trial-map.${ext}`, mapBuf);
+      }
+
       const blob = await zip.generateAsync({ type: 'blob' });
       setSavingProgress({ done: photos.length + 1, total: photos.length + 1 });
 
@@ -336,6 +491,10 @@ export default function PhotoBooth() {
       }
 
       setSavingProgress(null);
+      // Session exported successfully — it's safe to clear the saved copy
+      sessionActive.current = false;
+      await clearSession();
+      persistedPids.current = new Set();
       setStep(STEPS.COMPLETE);
     } catch (e) {
       console.error('Export error:', e);
@@ -398,14 +557,19 @@ export default function PhotoBooth() {
   // ─── RESET ──────────────────────────────────────────────────────────
   const resetApp = () => {
     photos.forEach(p => { if (p.url) URL.revokeObjectURL(p.url); });
+    if (mapImage?.url) URL.revokeObjectURL(mapImage.url);
+    sessionActive.current = false;
+    persistedPids.current = new Set();
+    clearSession();
     setStep(STEPS.HOME);
     setConfig({
       trialNumber: '', totalReps: 3, totalTreatments: 10, selectedReps: [],
-      photosPerPlot: 1, pattern: 'serpentine_asc', plotTreatmentMap: {}, armLoaded: false,
+      photosPerPlot: 1, pattern: 'serpentine_asc', customDirections: {}, plotTreatmentMap: {}, armLoaded: false,
     });
     setShootingQueue([]); setCurrentIndex(0); setPhotos([]); setSkippedPlots([]);
     setNotes({}); setShowNoteInput(false); setCurrentNote('');
     setArmText(''); setArmParseStatus(null); setRetakeMode(false); setSavingProgress(null);
+    setMapImage(null); setStartedAt(null);
   };
 
   const toggleRep = (rep) => {
@@ -417,16 +581,25 @@ export default function PhotoBooth() {
     });
   };
 
-  // Hidden file input for camera
+  // Hidden file inputs: camera (capture) for plot photos, library/camera for the reference map
   const cameraInput = (
-    <input
-      ref={fileInputRef}
-      type="file"
-      accept="image/*"
-      capture="environment"
-      onChange={handlePhotoCapture}
-      style={{ display: 'none' }}
-    />
+    <>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={handlePhotoCapture}
+        style={{ display: 'none' }}
+      />
+      <input
+        ref={mapImageRef}
+        type="file"
+        accept="image/*"
+        onChange={handleMapImageSelect}
+        style={{ display: 'none' }}
+      />
+    </>
   );
 
   // ═══════════════════════════════════════════════════════════════════
@@ -439,8 +612,25 @@ export default function PhotoBooth() {
         <div className="app-icon">📸</div>
         <h1 className="title-large">PhotoBooth</h1>
         <p className="subtitle" style={{ textAlign: 'center', marginBottom: 40 }}>Trial Photo Assistant</p>
+
+        {resumeInfo && (
+          <div className="card resume-card">
+            <p className="resume-label">▶ Resume session</p>
+            <p className="resume-trial">{resumeInfo.trialNumber || 'Untitled trial'}</p>
+            <p className="resume-sub">
+              {resumeInfo.photoCount}{resumeInfo.total ? ` of ${resumeInfo.total}` : ''} photos
+              {resumeInfo.startedAt ? ` · started ${new Date(resumeInfo.startedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : ''}
+            </p>
+            <button className="btn-success" style={{ marginTop: 14 }} onClick={resumeSession}>Resume</button>
+            <button className="link-danger" style={{ marginTop: 12, alignSelf: 'center' }}
+              onClick={() => { if (window.confirm('Discard the saved session? This cannot be undone.')) discardSavedSession(); }}>
+              Discard saved session
+            </button>
+          </div>
+        )}
+
         <div className="card">
-          <button className="btn-primary" onClick={() => setStep(STEPS.TRIAL)}>Manual Mode</button>
+          <button className="btn-primary" onClick={() => setStep(STEPS.TRIAL)}>{resumeInfo ? 'Start New Session' : 'Manual Mode'}</button>
           <p className="hint">Configure trial &rarr; auto-label &rarr; shoot</p>
         </div>
       </div>
@@ -546,8 +736,13 @@ export default function PhotoBooth() {
   if (step === STEPS.PATTERN) {
     const firstRep = config.selectedReps[0] ?? 1;
     const lastTrt = config.totalTreatments;
-    const exAsc = `${firstRep}01 → ${firstRep}${String(lastTrt).padStart(2, '0')}`;
-    const exDesc = `${firstRep}${String(lastTrt).padStart(2, '0')} → ${firstRep}01`;
+    const ll = String(lastTrt).padStart(2, '0');
+    const exAsc = `${firstRep}01 → ${firstRep}${ll}`;
+    const exDesc = `${firstRep}${ll} → ${firstRep}01`;
+    const goNextFromPattern = () => {
+      if (config.pattern === 'custom') setStep(STEPS.CUSTOM_DIR);
+      else setStep(STEPS.ARM_IMPORT);
+    };
     return (
       <div className="page">
         <div className="card">
@@ -557,20 +752,75 @@ export default function PhotoBooth() {
           <OptionButton
             selected={config.pattern === 'serpentine_asc'}
             title="Serpentine — start ascending"
-            desc={`Rep 1 ascending (${exAsc}), then Rep 2 reversed, alternating`}
+            desc={`Rep 1 ascending (${exAsc}), then each rep reverses`}
             onPress={() => setConfig({ ...config, pattern: 'serpentine_asc' })}
           />
           <OptionButton
             selected={config.pattern === 'serpentine_desc'}
             title="Serpentine — start descending"
-            desc={`Rep 1 descending (${exDesc}), then Rep 2 reversed, alternating`}
+            desc={`Rep 1 descending (${exDesc}), then each rep reverses`}
             onPress={() => setConfig({ ...config, pattern: 'serpentine_desc' })}
+          />
+          <OptionButton
+            selected={config.pattern === 'all_asc'}
+            title="All ascending"
+            desc={`Every rep low → high (${exAsc})`}
+            onPress={() => setConfig({ ...config, pattern: 'all_asc' })}
+          />
+          <OptionButton
+            selected={config.pattern === 'all_desc'}
+            title="All descending"
+            desc={`Every rep high → low (${exDesc})`}
+            onPress={() => setConfig({ ...config, pattern: 'all_desc' })}
+          />
+          <OptionButton
+            selected={config.pattern === 'custom'}
+            title="Custom (Advanced)"
+            desc="Set the direction for each rep individually"
+            onPress={() => setConfig({ ...config, pattern: 'custom' })}
           />
           <NavButtons
             onBack={() => setStep(STEPS.PHOTOS_PER_PLOT)}
-            onNext={() => setStep(STEPS.ARM_IMPORT)}
+            onNext={goNextFromPattern}
             nextDisabled={!config.pattern}
           />
+        </div>
+      </div>
+    );
+  }
+
+  if (step === STEPS.CUSTOM_DIR) {
+    const setRepDir = (rep, dir) => setConfig(prev => ({
+      ...prev, customDirections: { ...prev.customDirections, [rep]: dir },
+    }));
+    return (
+      <div className="page">
+        <div className="card">
+          <span className="step-label">Step 6 of 8 — Custom</span>
+          <h2 className="title">Direction per Rep</h2>
+          <p className="subtitle">Set which way you'll walk each rep</p>
+          <div className="custom-dir-list">
+            {config.selectedReps.map(rep => {
+              const dir = config.customDirections[rep] || 'asc';
+              const rBase = rep * 100;
+              const low = rBase + 1;
+              const high = rBase + config.totalTreatments;
+              return (
+                <div key={rep} className="custom-dir-row">
+                  <span className="custom-dir-rep">Rep {rep}</span>
+                  <div className="custom-dir-toggle">
+                    <button className={dir === 'asc' ? 'cd-btn sel' : 'cd-btn'} onClick={() => setRepDir(rep, 'asc')}>
+                      {low} → {high}
+                    </button>
+                    <button className={dir === 'desc' ? 'cd-btn sel' : 'cd-btn'} onClick={() => setRepDir(rep, 'desc')}>
+                      {high} → {low}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <NavButtons onBack={() => setStep(STEPS.PATTERN)} onNext={() => setStep(STEPS.ARM_IMPORT)} />
         </div>
       </div>
     );
@@ -618,7 +868,7 @@ export default function PhotoBooth() {
           )}
 
           <NavButtons
-            onBack={() => setStep(STEPS.PATTERN)}
+            onBack={() => setStep(config.pattern === 'custom' ? STEPS.CUSTOM_DIR : STEPS.PATTERN)}
             onNext={() => setStep(STEPS.SAVE_SETUP)}
             nextLabel={mapC > 0 ? 'Next' : 'Skip - No Mapping'} />
         </div>
@@ -631,6 +881,8 @@ export default function PhotoBooth() {
     const mapC = Object.keys(config.plotTreatmentMap).length;
     return (
       <div className="page">
+        {cameraInput}
+        {viewMapZoom && mapImage && <ImageZoom url={mapImage.url} onClose={() => setViewMapZoom(false)} />}
         <div className="card">
           <span className="step-label">Step 8 of 8</span>
           <h2 className="title">Ready to Shoot</h2>
@@ -641,10 +893,29 @@ export default function PhotoBooth() {
             <div className="summary-row"><span className="summary-key">Reps: </span><span>{config.selectedReps.map(r => `Rep ${r}`).join(', ')}</span></div>
             <div className="summary-row"><span className="summary-key">Treatments: </span><span>{config.totalTreatments} per rep</span></div>
             <div className="summary-row"><span className="summary-key">Photos per plot: </span><span>{config.photosPerPlot}</span></div>
-            <div className="summary-row"><span className="summary-key">Pattern: </span><span>{config.pattern === 'serpentine_asc' ? 'Serpentine (start asc)' : 'Serpentine (start desc)'}</span></div>
+            <div className="summary-row"><span className="summary-key">Pattern: </span><span>{PATTERN_LABELS[config.pattern] || config.pattern}</span></div>
             {mapC > 0 && <div className="summary-row"><span className="summary-key">ARM: </span><span>{mapC} plots mapped</span></div>}
             <p className="summary-total">📷 {totalPhotos} total photos</p>
           </div>
+
+          <div className="summary-box">
+            <span className="summary-label">Trial Map (optional)</span>
+            {mapImage ? (
+              <div className="map-ref-row" style={{ marginTop: 8 }}>
+                <img src={mapImage.url} className="map-ref-thumb" alt="Trial map" onClick={() => setViewMapZoom(true)} />
+                <div style={{ flex: 1 }}>
+                  <button className="link-blue" onClick={() => setViewMapZoom(true)}>View full screen</button>
+                  <button className="link-blue" onClick={attachMapImage} style={{ marginTop: 4 }}>Replace</button>
+                  <button className="link-danger" onClick={() => { if (mapImage.url) URL.revokeObjectURL(mapImage.url); setMapImage(null); }} style={{ marginTop: 4 }}>Remove</button>
+                </div>
+              </div>
+            ) : (
+              <button className="btn-secondary" style={{ marginTop: 8, paddingBlock: 12 }} onClick={attachMapImage}>
+                📎 Attach a photo of your trial map
+              </button>
+            )}
+          </div>
+
           <NavButtons onBack={() => setStep(STEPS.ARM_IMPORT)} onNext={startShooting}
             nextLabel="Start Shooting" nextClass="btn-success" />
         </div>
@@ -734,14 +1005,35 @@ export default function PhotoBooth() {
           shootingQueue={shootingQueue}
           onClose={() => setShowMap(false)}
           onPlotTap={handleMapPlotTap}
+          mapImage={mapImage}
+          onAttachMap={attachMapImage}
+          onViewMap={() => setViewMapZoom(true)}
         />
       )}
+      {viewMapZoom && mapImage && <ImageZoom url={mapImage.url} onClose={() => setViewMapZoom(false)} />}
       </>
     );
   }
 
   if (step === STEPS.REVIEW) {
     const noteCount = Object.keys(notes).length;
+    // Completeness check: which queued plots have zero photos?
+    const queuedPlots = [];
+    const seenQ = new Set();
+    shootingQueue.forEach(s => {
+      const k = `${s.rep}-${s.plot}`;
+      if (!seenQ.has(k)) { seenQ.add(k); queuedPlots.push({ rep: s.rep, plot: s.plot }); }
+    });
+    const photographedPlots = new Set(photos.map(p => `${p.rep}-${p.plot}`));
+    const missingPlots = queuedPlots.filter(q => !photographedPlots.has(`${q.rep}-${q.plot}`));
+
+    const finishSession = () => {
+      sessionActive.current = false;
+      clearSession();
+      persistedPids.current = new Set();
+      setStep(STEPS.COMPLETE);
+    };
+
     return (
       <div className="review-page">
         <div className="review-card">
@@ -750,6 +1042,23 @@ export default function PhotoBooth() {
             {photos.length} photos{skippedPlots.length > 0 ? `, ${skippedPlots.length} skipped` : ''}
             {noteCount > 0 ? `, ${noteCount} notes` : ''}
           </p>
+
+          {!savingProgress && missingPlots.length > 0 && (
+            <div className="info-box error">
+              <p>⚠️ {missingPlots.length} plot{missingPlots.length > 1 ? 's' : ''} with no photo</p>
+              <p className="mono" style={{ marginTop: 6 }}>
+                {missingPlots.slice(0, 30).map(m => m.plot).join(', ')}{missingPlots.length > 30 ? '…' : ''}
+              </p>
+              <button className="link-blue" style={{ marginTop: 8 }} onClick={() => setStep(STEPS.SHOOTING)}>
+                ← Back to shooting
+              </button>
+            </div>
+          )}
+          {!savingProgress && missingPlots.length === 0 && queuedPlots.length > 0 && (
+            <div className="info-box success">
+              <p>✓ All {queuedPlots.length} plots photographed</p>
+            </div>
+          )}
 
           {savingProgress && (
             <div className="info-box info">
@@ -779,7 +1088,7 @@ export default function PhotoBooth() {
           {!savingProgress && (
             <div className="review-buttons">
               <button className="btn-success" onClick={exportAllPhotos}>Export All to Files ({photos.length})</button>
-              <button className="btn-primary" style={{ marginTop: 12 }} onClick={() => setStep(STEPS.COMPLETE)}>Done</button>
+              <button className="btn-primary" style={{ marginTop: 12 }} onClick={finishSession}>Done</button>
             </div>
           )}
         </div>

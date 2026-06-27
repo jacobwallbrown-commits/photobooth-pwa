@@ -170,3 +170,30 @@ button:disabled { opacity: 0.4; cursor: default; }
 /* Side picker over map */
 .map-side-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
 .map-side-modal { background: #0f1f3a; border: 1px solid var(--card-border); border-radius: 16px; padding: 24px; width: 100%; max-width: 320px; text-align: center; }
+
+/* Resume card */
+.resume-card { display: flex; flex-direction: column; margin-bottom: 16px; border-color: var(--green-border); background: var(--green-bg); }
+.resume-label { font-size: 12px; font-weight: 700; color: var(--green-light); text-transform: uppercase; letter-spacing: 1px; }
+.resume-trial { font-size: 20px; font-weight: 800; color: var(--text); margin-top: 4px; }
+.resume-sub { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+
+/* Link-style buttons */
+.link-blue { background: none; border: none; color: var(--blue-light); font-size: 13px; font-weight: 600; cursor: pointer; padding: 0; width: auto; display: block; text-align: left; }
+
+/* Reference map thumbnail row */
+.map-ref-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.map-ref-thumb { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; border: 1px solid var(--card-border); cursor: pointer; flex-shrink: 0; }
+.map-ref-label { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+
+/* Full-screen zoom viewer */
+.zoom-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.92); display: flex; align-items: center; justify-content: center; z-index: 300; padding: 12px; }
+.zoom-img { max-width: 100%; max-height: 100%; object-fit: contain; touch-action: pinch-zoom; }
+.zoom-close { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 16px; width: 44px; height: 44px; border-radius: 22px; background: rgba(255,255,255,0.15); color: white; font-size: 20px; z-index: 301; }
+
+/* Custom direction step */
+.custom-dir-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 8px; max-height: 50vh; overflow-y: auto; }
+.custom-dir-row { display: flex; flex-direction: column; gap: 6px; }
+.custom-dir-rep { font-size: 14px; font-weight: 700; color: var(--text); }
+.custom-dir-toggle { display: flex; gap: 8px; }
+.cd-btn { flex: 1; padding: 12px 6px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.05); color: var(--text-muted); font-size: 13px; font-weight: 600; font-family: 'Menlo', monospace; }
+.cd-btn.sel { border: 2px solid var(--blue); background: var(--blue-bg); color: var(--blue-light); }

@@ -46,11 +46,27 @@ export function parseManualEntry(text) {
 
 // ─── PATTERN -> DIRECTIONS PER REP ─────────────────────────────────
 // pattern values:
-//   'serpentine_asc'  - rep 1 ascending, rep 2 descending, rep 3 ascending, ...
-//   'serpentine_desc' - rep 1 descending, rep 2 ascending, rep 3 descending, ...
-export function directionsFromPattern(pattern, selectedReps) {
+//   'serpentine_asc'  - rep 1 ascending, rep 2 descending, alternating
+//   'serpentine_desc' - rep 1 descending, rep 2 ascending, alternating
+//   'all_asc'         - every rep ascending
+//   'all_desc'        - every rep descending
+//   'custom'          - per-rep directions supplied in customDirections {rep: 'asc'|'desc'}
+export function directionsFromPattern(pattern, selectedReps, customDirections) {
   const dirs = {};
-  const startAsc = pattern === 'serpentine_asc';
+  if (pattern === 'all_asc') {
+    selectedReps.forEach(rep => { dirs[rep] = 'asc'; });
+    return dirs;
+  }
+  if (pattern === 'all_desc') {
+    selectedReps.forEach(rep => { dirs[rep] = 'desc'; });
+    return dirs;
+  }
+  if (pattern === 'custom') {
+    selectedReps.forEach(rep => { dirs[rep] = (customDirections && customDirections[rep]) || 'asc'; });
+    return dirs;
+  }
+  // serpentine
+  const startAsc = pattern !== 'serpentine_desc';
   selectedReps.forEach((rep, idx) => {
     const isAsc = (idx % 2 === 0) ? startAsc : !startAsc;
     dirs[rep] = isAsc ? 'asc' : 'desc';
@@ -61,9 +77,9 @@ export function directionsFromPattern(pattern, selectedReps) {
 // ─── SHOOTING QUEUE BUILDER ────────────────────────────────────────
 export function buildShootingQueue(config) {
   const queue = [];
-  const { trialNumber, selectedReps, totalTreatments, photosPerPlot, pattern, plotTreatmentMap } = config;
+  const { trialNumber, selectedReps, totalTreatments, photosPerPlot, pattern, plotTreatmentMap, customDirections } = config;
   const perPlot = Math.max(1, photosPerPlot || 1);
-  const directions = directionsFromPattern(pattern, selectedReps);
+  const directions = directionsFromPattern(pattern, selectedReps, customDirections);
 
   for (let i = 0; i < selectedReps.length; i++) {
     const repNum = selectedReps[i];
