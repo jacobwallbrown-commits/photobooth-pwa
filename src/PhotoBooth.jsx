@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import JSZip from 'jszip';
-import { buildShootingQueue, parseARMText, parseManualEntry } from './utils';
+import { buildShootingQueue, buildQueueFromGrid, plotMapFromGrid, parseARMText, parseManualEntry } from './utils';
 import { makePid, saveMeta, savePhotoBlob, saveMapBlob, peekSession, loadSession, clearSession } from './session';
+import { scanTrialMap } from './ocr';
 
 function sanitizeFileName(name) {
   return name.replace(/[^a-zA-Z0-9_\-. ]/g, '_').replace(/_{2,}/g, '_').trim() || 'Trial';
@@ -11,8 +12,16 @@ const STEPS = {
   HOME: 'home', HELP: 'help', TRIAL: 'trial', REPS: 'reps', TREATMENTS: 'treatments',
   SELECT_REPS: 'selectReps', PHOTOS_PER_PLOT: 'photosPerPlot', PATTERN: 'pattern',
   CUSTOM_DIR: 'customDir', ARM_IMPORT: 'armImport', SAVE_SETUP: 'saveSetup',
+  MAP_TRIAL: 'mapTrial', MAP_SCAN: 'mapScan', MAP_GRID: 'mapGrid',
   SHOOTING: 'shooting', REVIEW: 'review', COMPLETE: 'complete',
 };
+
+const CORNERS = [
+  { key: 'TL', label: '↖ Top-left' },
+  { key: 'TR', label: '↗ Top-right' },
+  { key: 'BL', label: '↙ Bottom-left' },
+  { key: 'BR', label: '↘ Bottom-right' },
+];
 
 const PATTERN_LABELS = {
   serpentine_asc: 'Serpentine (start asc)',
@@ -76,6 +85,44 @@ function MapView({ config, photos, shootingQueue, onClose, onPlotTap, mapImage, 
     return acc;
   }, {});
   const queueKeys = new Set(shootingQueue.map(s => `${s.rep}-${s.plot}`));
+
+  // ── Map-mode: render the scanned grid layout instead of rep rows ──
+  if (config.mode === 'map' && config.mapGrid) {
+    return (
+      <div className="map-overlay" onClick={onClose}>
+        <div className="map-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="map-header">
+            <h3 className="map-title">Trial Map</h3>
+            <button className="map-close" onClick={onClose} aria-label="Close map">✕</button>
+          </div>
+          {mapImage && (
+            <div className="map-ref-row">
+              <img src={mapImage.url} className="map-ref-thumb" alt="Trial map reference" onClick={onViewMap} />
+              <div style={{ flex: 1 }}>
+                <p className="map-ref-label">Your scanned map</p>
+                <button className="link-blue" onClick={onViewMap}>Tap to view full screen</button>
+              </div>
+            </div>
+          )}
+          <p className="map-hint">Tap any plot to take an extra photo. Green = photographed.</p>
+          <div className="map-grid-scroll">
+            <div className="edit-grid" style={{ gridTemplateColumns: `repeat(${config.mapGrid[0]?.length || 1}, 58px)` }}>
+              {config.mapGrid.map((row, r) => row.map((cell, c) => {
+                if (!cell || cell.plot == null) return <div key={`${r}-${c}`} className="edit-cell empty" />;
+                const count = countByPlot[cell.plot] || 0;
+                return (
+                  <button key={`${r}-${c}`} className={`edit-cell ${count > 0 ? 'taken' : ''}`} onClick={() => onPlotTap(null, cell.plot)}>
+                    <span className="ec-plot">{cell.plot}</span>
+                    <span className="ec-trt">{count > 0 ? (count > 1 ? `×${count}` : '✓') : (cell.treatment != null ? `T${cell.treatment}` : '')}</span>
+                  </button>
+                );
+              }))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="map-overlay" onClick={onClose}>
@@ -145,8 +192,10 @@ function MapView({ config, photos, shootingQueue, onClose, onPlotTap, mapImage, 
 export default function PhotoBooth() {
   const [step, setStep] = useState(STEPS.HOME);
   const [config, setConfig] = useState({
+    mode: 'manual',
     trialNumber: '', totalReps: 3, totalTreatments: 10, selectedReps: [],
     photosPerPlot: 1, pattern: 'serpentine_asc', customDirections: {}, plotTreatmentMap: {}, armLoaded: false,
+    mapGrid: null, startCorner: 'TL', snake: true,
   });
   const [shootingQueue, setShootingQueue] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -165,10 +214,15 @@ export default function PhotoBooth() {
   const [viewMapZoom, setViewMapZoom] = useState(false);
   const [resumeInfo, setResumeInfo] = useState(null);  // summary of a saved session for the Home card
   const [startedAt, setStartedAt] = useState(null);
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanProgress, setScanProgress] = useState(0);
+  const [scanStatus, setScanStatus] = useState(null);  // { ok, filled, total } after a scan
+  const [editCell, setEditCell] = useState(null);      // { r, c } being edited in the grid
 
   const fileInputRef = useRef(null);
   const armFileRef = useRef(null);
   const mapImageRef = useRef(null);
+  const scanInputRef = useRef(null);
   const persistedPids = useRef(new Set());
   const sessionActive = useRef(false);
 
@@ -361,6 +415,66 @@ export default function PhotoBooth() {
     if (sessionActive.current) saveMapBlob(file);
   }, []);
 
+  // ─── TRIAL-MAP SCAN (OCR) ──────────────────────────────────────────
+  const pickScanImage = useCallback(() => {
+    if (scanInputRef.current) { scanInputRef.current.value = ''; scanInputRef.current.click(); }
+  }, []);
+
+  const handleScanSelect = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Keep it as the reference image too
+    setMapImage(prev => { if (prev?.url) URL.revokeObjectURL(prev.url); return { file, url: URL.createObjectURL(file) }; });
+    setScanBusy(true);
+    setScanProgress(0);
+    setScanStatus(null);
+    try {
+      const res = await scanTrialMap(file, (p) => setScanProgress(p));
+      if (!res.grid || res.grid.length === 0) {
+        setScanStatus({ ok: false, message: "Couldn't read a grid. Try a clearer/closer image, or build it by hand." });
+      } else {
+        setConfig(prev => ({ ...prev, mapGrid: res.grid }));
+        setScanStatus({ ok: true, filled: res.filled, total: res.total });
+        setStep(STEPS.MAP_GRID);
+      }
+    } catch (err) {
+      console.error('scan error', err);
+      setScanStatus({ ok: false, message: 'Scan failed. Try again or build the grid by hand.' });
+    } finally {
+      setScanBusy(false);
+    }
+  }, []);
+
+  // Grid editing helpers (map mode)
+  const setGridCell = useCallback((r, c, patch) => {
+    setConfig(prev => {
+      const grid = prev.mapGrid.map(row => row.slice());
+      const cur = grid[r][c] || { plot: null, treatment: null };
+      const next = { ...cur, ...patch };
+      grid[r][c] = (next.plot == null && next.treatment == null) ? null : next;
+      return { ...prev, mapGrid: grid };
+    });
+  }, []);
+
+  const addGridRow = useCallback(() => setConfig(prev => {
+    const cols = prev.mapGrid[0]?.length || 1;
+    return { ...prev, mapGrid: [...prev.mapGrid, Array(cols).fill(null)] };
+  }), []);
+  const addGridCol = useCallback(() => setConfig(prev => ({
+    ...prev, mapGrid: prev.mapGrid.map(row => [...row, null]),
+  })), []);
+
+  const startMapMode = useCallback(() => {
+    setConfig({
+      mode: 'map',
+      trialNumber: '', totalReps: 3, totalTreatments: 10, selectedReps: [],
+      photosPerPlot: 1, pattern: 'serpentine_asc', customDirections: {}, plotTreatmentMap: {}, armLoaded: false,
+      mapGrid: null, startCorner: 'TL', snake: true,
+    });
+    setMapImage(null); setScanStatus(null); setScanProgress(0);
+    setStep(STEPS.MAP_TRIAL);
+  }, []);
+
   // ─── RESUME ─────────────────────────────────────────────────────────
   const resumeSession = useCallback(async () => {
     const data = await loadSession();
@@ -417,7 +531,18 @@ export default function PhotoBooth() {
   };
 
   const startShooting = async () => {
-    const queue = buildShootingQueue(config);
+    let cfg = config;
+    let queue;
+    if (config.mode === 'map' && config.mapGrid) {
+      // Derive the plot→treatment map from the grid so extra (map-tap) photos get treatment names too
+      cfg = { ...config, plotTreatmentMap: plotMapFromGrid(config.mapGrid) };
+      setConfig(cfg);
+      queue = buildQueueFromGrid(cfg.trialNumber, cfg.mapGrid, {
+        photosPerPlot: cfg.photosPerPlot, snake: cfg.snake, startCorner: cfg.startCorner,
+      });
+    } else {
+      queue = buildShootingQueue(config);
+    }
     // Fresh session: wipe any prior saved one
     await clearSession();
     persistedPids.current = new Set();
@@ -563,13 +688,15 @@ export default function PhotoBooth() {
     clearSession();
     setStep(STEPS.HOME);
     setConfig({
+      mode: 'manual',
       trialNumber: '', totalReps: 3, totalTreatments: 10, selectedReps: [],
       photosPerPlot: 1, pattern: 'serpentine_asc', customDirections: {}, plotTreatmentMap: {}, armLoaded: false,
+      mapGrid: null, startCorner: 'TL', snake: true,
     });
     setShootingQueue([]); setCurrentIndex(0); setPhotos([]); setSkippedPlots([]);
     setNotes({}); setShowNoteInput(false); setCurrentNote('');
     setArmText(''); setArmParseStatus(null); setRetakeMode(false); setSavingProgress(null);
-    setMapImage(null); setStartedAt(null);
+    setMapImage(null); setStartedAt(null); setScanStatus(null); setScanBusy(false); setEditCell(null);
   };
 
   const toggleRep = (rep) => {
@@ -597,6 +724,13 @@ export default function PhotoBooth() {
         type="file"
         accept="image/*"
         onChange={handleMapImageSelect}
+        style={{ display: 'none' }}
+      />
+      <input
+        ref={scanInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleScanSelect}
         style={{ display: 'none' }}
       />
     </>
@@ -630,9 +764,10 @@ export default function PhotoBooth() {
         )}
 
         <div className="card">
-          <button className="btn-primary" onClick={() => setStep(STEPS.TRIAL)}>{resumeInfo ? 'Start New Session' : 'Manual Mode'}</button>
+          <button className="btn-success" onClick={startMapMode}>🗺️ Use Trial Map</button>
+          <button className="btn-primary" style={{ marginTop: 12 }} onClick={() => { setConfig(c => ({ ...c, mode: 'manual' })); setStep(STEPS.TRIAL); }}>Manual Mode</button>
           <button className="btn-secondary" style={{ marginTop: 12 }} onClick={() => setStep(STEPS.HELP)}>📖 How to Use</button>
-          <p className="hint">Configure trial &rarr; auto-label &rarr; shoot</p>
+          <p className="hint">Scan your map, or configure by hand &rarr; shoot</p>
         </div>
       </div>
     );
@@ -708,6 +843,154 @@ export default function PhotoBooth() {
           </div>
           <div className="review-buttons">
             <button className="btn-primary" onClick={() => setStep(STEPS.HOME)}>Back to Home</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── MAP MODE: TRIAL NAME ──────────────────────────────────────────
+  if (step === STEPS.MAP_TRIAL) {
+    return (
+      <div className="page">
+        <div className="card">
+          <span className="step-label">Trial Map · Step 1 of 3</span>
+          <h2 className="title">Trial Number</h2>
+          <p className="subtitle">Enter a name or number for this trial</p>
+          <input
+            className="input"
+            placeholder="e.g., CornTrial1"
+            value={config.trialNumber}
+            onChange={e => setConfig({ ...config, trialNumber: e.target.value })}
+            autoFocus
+          />
+          <NavButtons
+            onBack={() => setStep(STEPS.HOME)}
+            onNext={() => setStep(STEPS.MAP_SCAN)}
+            nextDisabled={!config.trialNumber.trim()}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // ─── MAP MODE: SCAN PHOTO ──────────────────────────────────────────
+  if (step === STEPS.MAP_SCAN) {
+    return (
+      <div className="page">
+        {cameraInput}
+        {viewMapZoom && mapImage && <ImageZoom url={mapImage.url} onClose={() => setViewMapZoom(false)} />}
+        <div className="card">
+          <span className="step-label">Trial Map · Step 2 of 3</span>
+          <h2 className="title">Scan Your Map</h2>
+          <p className="subtitle">Take or choose a photo of your trial map. The app reads the plot &amp; treatment numbers so the shooting order matches your field.</p>
+
+          {mapImage && (
+            <img src={mapImage.url} className="scan-preview" alt="Trial map" onClick={() => setViewMapZoom(true)} />
+          )}
+
+          {scanBusy ? (
+            <div className="info-box info">
+              <p style={{ textAlign: 'center', marginBottom: 10 }}>Reading map… {Math.round(scanProgress * 100)}%</p>
+              <div className="progress-bar-bg"><div className="progress-bar-fill" style={{ width: `${Math.round(scanProgress * 100)}%` }} /></div>
+            </div>
+          ) : (
+            <>
+              <button className="btn-success" onClick={pickScanImage}>{mapImage ? '📷 Choose a Different Photo' : '📷 Take / Choose Map Photo'}</button>
+              {scanStatus && !scanStatus.ok && (
+                <div className="info-box error" style={{ marginTop: 12 }}><p>{scanStatus.message}</p></div>
+              )}
+              <p className="hint" style={{ marginTop: 14 }}>Tip: a straight-on, well-lit shot reads best. You'll get to fix any misreads next.</p>
+              <div className="row">
+                <button className="btn-secondary flex1" onClick={() => setStep(STEPS.MAP_TRIAL)}>Back</button>
+                <button className="btn-secondary flex1" onClick={() => {
+                  // Build by hand: start with a small empty grid
+                  setConfig(prev => ({ ...prev, mapGrid: [[null, null, null], [null, null, null]] }));
+                  setStep(STEPS.MAP_GRID);
+                }}>Build by Hand</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ─── MAP MODE: EDITABLE GRID ───────────────────────────────────────
+  if (step === STEPS.MAP_GRID && config.mapGrid) {
+    const grid = config.mapGrid;
+    let filled = 0, cells = 0;
+    grid.forEach(row => row.forEach(c => { cells++; if (c && c.plot != null) filled++; }));
+    return (
+      <div className="page">
+        {editCell && (() => {
+          const cur = grid[editCell.r]?.[editCell.c] || {};
+          return (
+            <div className="map-side-overlay" onClick={() => setEditCell(null)}>
+              <div className="map-side-modal" onClick={(e) => e.stopPropagation()}>
+                <h3 className="title" style={{ fontSize: 20, marginBottom: 12 }}>Edit cell</h3>
+                <label className="cell-edit-label">Plot #</label>
+                <input className="input" type="number" inputMode="numeric" placeholder="plot"
+                  value={cur.plot ?? ''} autoFocus
+                  onChange={e => setGridCell(editCell.r, editCell.c, { plot: e.target.value === '' ? null : parseInt(e.target.value) })} />
+                <label className="cell-edit-label" style={{ marginTop: 12 }}>Treatment #</label>
+                <input className="input" type="number" inputMode="numeric" placeholder="treatment"
+                  value={cur.treatment ?? ''}
+                  onChange={e => setGridCell(editCell.r, editCell.c, { treatment: e.target.value === '' ? null : parseInt(e.target.value) })} />
+                <button className="btn-primary" style={{ marginTop: 16 }} onClick={() => setEditCell(null)}>Done</button>
+                <button className="link-danger" style={{ marginTop: 12, alignSelf: 'center' }}
+                  onClick={() => { setGridCell(editCell.r, editCell.c, { plot: null, treatment: null }); setEditCell(null); }}>Clear cell</button>
+              </div>
+            </div>
+          );
+        })()}
+
+        <div className="card wide">
+          <h2 className="title">Check the Grid</h2>
+          <p className="subtitle">
+            {filled} of {cells} cells filled. Tap any cell to fix it. Empty cells are skipped.
+          </p>
+
+          <div className="grid-scroll">
+            <div className="edit-grid" style={{ gridTemplateColumns: `repeat(${grid[0]?.length || 1}, 58px)` }}>
+              {grid.map((row, r) => row.map((cell, c) => (
+                <button key={`${r}-${c}`}
+                  className={`edit-cell ${cell && cell.plot != null ? '' : 'empty'} ${cell && cell.plot != null && cell.treatment == null ? 'no-trt' : ''}`}
+                  onClick={() => setEditCell({ r, c })}>
+                  <span className="ec-plot">{cell?.plot ?? '+'}</span>
+                  <span className="ec-trt">{cell?.treatment != null ? `T${cell.treatment}` : (cell?.plot != null ? 'T?' : '')}</span>
+                </button>
+              )))}
+            </div>
+          </div>
+
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="btn-secondary flex1" onClick={addGridRow}>+ Row</button>
+            <button className="btn-secondary flex1" onClick={addGridCol}>+ Column</button>
+          </div>
+
+          <div className="summary-box" style={{ marginTop: 16 }}>
+            <span className="summary-label">Walking order</span>
+            <div className="corner-grid">
+              {CORNERS.map(cn => (
+                <button key={cn.key} className={config.startCorner === cn.key ? 'cd-btn sel' : 'cd-btn'}
+                  onClick={() => setConfig({ ...config, startCorner: cn.key })}>{cn.label}</button>
+              ))}
+            </div>
+            <button className={config.snake ? 'toggle-row on' : 'toggle-row'} onClick={() => setConfig({ ...config, snake: !config.snake })}>
+              <span>Snake (alternate direction each row)</span>
+              <span className="toggle-pill">{config.snake ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
+
+          <div className="summary-box">
+            <span className="summary-label">Photos per plot</span>
+            <NumberStepper value={config.photosPerPlot} onChange={v => setConfig({ ...config, photosPerPlot: v })} />
+          </div>
+
+          <div className="review-buttons">
+            <button className="btn-success" onClick={startShooting} disabled={filled === 0}>Start Shooting ({filled} plots)</button>
+            <button className="btn-secondary" style={{ marginTop: 12 }} onClick={() => setStep(STEPS.MAP_SCAN)}>Back</button>
           </div>
         </div>
       </div>
@@ -1001,7 +1284,8 @@ export default function PhotoBooth() {
   }
 
   if (step === STEPS.SHOOTING && currentShot) {
-    const isNewRep = currentIndex === 0 || shootingQueue[currentIndex - 1]?.rep !== currentShot.rep;
+    const mapMode = config.mode === 'map';
+    const isNewRep = !mapMode && (currentIndex === 0 || shootingQueue[currentIndex - 1]?.rep !== currentShot.rep);
     const repDone = shootingQueue.slice(0, currentIndex).filter(s => s.rep === currentShot.rep).length;
     const repTotal = shootingQueue.filter(s => s.rep === currentShot.rep).length;
 
@@ -1033,7 +1317,7 @@ export default function PhotoBooth() {
           <div className="shooting-topbar">
             <span className="muted">{currentIndex + 1} of {shootingQueue.length}</span>
             <div className="topbar-right">
-              <span className="muted">Rep {currentShot.rep} - {repDone + 1}/{repTotal}</span>
+              {!mapMode && <span className="muted">Rep {currentShot.rep} - {repDone + 1}/{repTotal}</span>}
               <button className="map-btn" onClick={() => setShowMap(true)} aria-label="Open trial map">🗺️</button>
             </div>
           </div>

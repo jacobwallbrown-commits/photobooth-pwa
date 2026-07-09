@@ -190,6 +190,24 @@ button:disabled { opacity: 0.4; cursor: default; }
 .zoom-img { max-width: 100%; max-height: 100%; object-fit: contain; touch-action: pinch-zoom; }
 .zoom-close { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 16px; width: 44px; height: 44px; border-radius: 22px; background: rgba(255,255,255,0.15); color: white; font-size: 20px; z-index: 301; }
 
+/* Trial-map scan + editable grid */
+.scan-preview { width: 100%; max-height: 220px; object-fit: contain; border-radius: 12px; border: 1px solid var(--card-border); margin-bottom: 16px; background: rgba(255,255,255,0.03); cursor: pointer; }
+.grid-scroll { max-height: 46vh; overflow: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--card-border); border-radius: 12px; padding: 8px; margin-bottom: 4px; }
+.edit-grid { display: grid; gap: 4px; }
+.edit-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 48px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.06); color: var(--text); padding: 2px; }
+.edit-cell.empty { background: transparent; border-style: dashed; border-color: rgba(255,255,255,0.1); color: var(--text-faint); }
+.edit-cell.no-trt { border-color: var(--yellow-border); }
+.edit-cell.taken { background: var(--green-bg); border-color: var(--green-border); }
+.ec-plot { font-size: 13px; font-weight: 700; line-height: 1.1; }
+.ec-trt { font-size: 10px; color: var(--text-muted); line-height: 1.1; }
+.edit-cell.taken .ec-trt { color: var(--green-light); }
+.cell-edit-label { display: block; font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; text-align: left; margin-bottom: 6px; }
+.corner-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+.toggle-row { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.15); background: rgba(255,255,255,0.05); color: var(--text); font-size: 14px; font-weight: 600; margin-top: 8px; }
+.toggle-row.on { border-color: var(--blue); background: var(--blue-bg); }
+.toggle-pill { font-size: 12px; font-weight: 800; padding: 3px 10px; border-radius: 100px; background: rgba(255,255,255,0.12); color: var(--text-muted); }
+.toggle-row.on .toggle-pill { background: var(--blue); color: white; }
+
 /* How to Use guide */
 .help-body { display: block; }
 .help-section { padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }

@@ -112,3 +112,75 @@ export function buildShootingQueue(config) {
   }
   return queue;
 }
+
+// ─── MAP-GRID QUEUE BUILDER ────────────────────────────────────────
+// grid: 2D array [row][col] of cells; a cell is null/undefined (no plot)
+//   or { plot: number, treatment: number|null }.
+// options: { photosPerPlot, snake (default true), startCorner: 'TL'|'TR'|'BL'|'BR', firstAxis: 'row'|'col' }
+// Walks the grid in physical field order so the queue matches the map.
+export function buildQueueFromGrid(trialNumber, grid, options = {}) {
+  const perPlot = Math.max(1, options.photosPerPlot || 1);
+  const snake = options.snake !== false;
+  const startCorner = options.startCorner || 'TL';
+  const firstAxis = options.firstAxis || 'row'; // 'row' = walk rows (default), 'col' = walk columns
+
+  const nRows = grid.length;
+  const nCols = grid.reduce((m, r) => Math.max(m, r ? r.length : 0), 0);
+  const startTop = startCorner === 'TL' || startCorner === 'TR';
+  const startLeft = startCorner === 'TL' || startCorner === 'BL';
+
+  const cellAt = (r, c) => (grid[r] && grid[r][c]) ? grid[r][c] : null;
+  const order = [];
+
+  if (firstAxis === 'row') {
+    const rowSeq = startTop ? range(0, nRows) : range(nRows - 1, -1);
+    rowSeq.forEach((r, i) => {
+      let colSeq = startLeft ? range(0, nCols) : range(nCols - 1, -1);
+      if (snake && i % 2 === 1) colSeq = colSeq.slice().reverse();
+      colSeq.forEach(c => { const cell = cellAt(r, c); if (cell && cell.plot != null) order.push(cell); });
+    });
+  } else {
+    const colSeq = startLeft ? range(0, nCols) : range(nCols - 1, -1);
+    colSeq.forEach((c, i) => {
+      let rowSeq = startTop ? range(0, nRows) : range(nRows - 1, -1);
+      if (snake && i % 2 === 1) rowSeq = rowSeq.slice().reverse();
+      rowSeq.forEach(r => { const cell = cellAt(r, c); if (cell && cell.plot != null) order.push(cell); });
+    });
+  }
+
+  const queue = [];
+  for (const cell of order) {
+    const trt = cell.treatment;
+    const trtSuffix = trt != null ? `_Trt${trt}` : '';
+    for (let n = 1; n <= perPlot; n++) {
+      queue.push({
+        rep: cell.rep ?? null,
+        plot: cell.plot,
+        treatment: trt ?? null,
+        photoNum: n,
+        totalPhotos: perPlot,
+        fileName: `${trialNumber}_Plot${cell.plot}${trtSuffix}_${n}.jpg`,
+        label: perPlot > 1 ? `Plot ${cell.plot} — Photo ${n} of ${perPlot}` : `Plot ${cell.plot}`,
+        trtLabel: trt != null ? `Treatment ${trt}` : null,
+      });
+    }
+  }
+  return queue;
+}
+
+function range(start, end) {
+  // inclusive-exclusive when start<end; descending when end<start (end exclusive)
+  const out = [];
+  if (start <= end) { for (let i = start; i < end; i++) out.push(i); }
+  else { for (let i = start; i > end; i--) out.push(i); }
+  return out;
+}
+
+// Build a plot→treatment map from a grid (for filename labeling / ARM-free flow).
+export function plotMapFromGrid(grid) {
+  const map = {};
+  (grid || []).forEach(row => (row || []).forEach(cell => {
+    if (cell && cell.plot != null && cell.treatment != null) map[cell.plot] = cell.treatment;
+  }));
+  return map;
+}
