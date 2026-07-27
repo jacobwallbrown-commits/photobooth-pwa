@@ -3,6 +3,7 @@ import JSZip from 'jszip';
 import { buildShootingQueue, buildQueueFromGrid, plotMapFromGrid, parseARMText, parseManualEntry } from './utils';
 import { makePid, saveMeta, savePhotoBlob, saveMapBlob, peekSession, loadSession, clearSession } from './session';
 import { scanTrialMap } from './ocr';
+import { importSpreadsheet, importPdf } from './mapImport';
 
 function sanitizeFileName(name) {
   return name.replace(/[^a-zA-Z0-9_\-. ]/g, '_').replace(/_{2,}/g, '_').trim() || 'Trial';
@@ -12,7 +13,7 @@ const STEPS = {
   HOME: 'home', HELP: 'help', TRIAL: 'trial', REPS: 'reps', TREATMENTS: 'treatments',
   SELECT_REPS: 'selectReps', PHOTOS_PER_PLOT: 'photosPerPlot', PATTERN: 'pattern',
   CUSTOM_DIR: 'customDir', ARM_IMPORT: 'armImport', SAVE_SETUP: 'saveSetup',
-  MAP_TRIAL: 'mapTrial', MAP_SCAN: 'mapScan', MAP_GRID: 'mapGrid',
+  MAP_TRIAL: 'mapTrial', MAP_SCAN: 'mapScan', MAP_SHEET: 'mapSheet', MAP_GRID: 'mapGrid',
   SHOOTING: 'shooting', REVIEW: 'review', COMPLETE: 'complete',
 };
 
@@ -218,11 +219,13 @@ export default function PhotoBooth() {
   const [scanProgress, setScanProgress] = useState(0);
   const [scanStatus, setScanStatus] = useState(null);  // { ok, filled, total } after a scan
   const [editCell, setEditCell] = useState(null);      // { r, c } being edited in the grid
+  const [sheetChoices, setSheetChoices] = useState(null); // Excel tabs awaiting a pick
 
   const fileInputRef = useRef(null);
   const armFileRef = useRef(null);
   const mapImageRef = useRef(null);
   const scanInputRef = useRef(null);
+  const fileImportRef = useRef(null);
   const persistedPids = useRef(new Set());
   const sessionActive = useRef(false);
 
@@ -445,6 +448,55 @@ export default function PhotoBooth() {
     }
   }, []);
 
+  // ─── TRIAL-MAP FILE IMPORT (Excel / CSV / PDF) ─────────────────────
+  const pickImportFile = useCallback(() => {
+    if (fileImportRef.current) { fileImportRef.current.value = ''; fileImportRef.current.click(); }
+  }, []);
+
+  const handleFileImport = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setScanBusy(true); setScanProgress(0); setScanStatus(null); setSheetChoices(null);
+    const isPdf = /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
+    try {
+      if (isPdf) {
+        const res = await importPdf(file);
+        if (!res.grid.length) {
+          setScanStatus({ ok: false, message: "No plot table found in that PDF. If it's a scanned image, use the photo scan instead." });
+        } else {
+          setConfig(prev => ({ ...prev, mapGrid: res.grid }));
+          setScanStatus({ ok: true, filled: res.plots, total: res.plots, source: 'PDF' });
+          setStep(STEPS.MAP_GRID);
+        }
+      } else {
+        const { sheets } = await importSpreadsheet(file);
+        const usable = sheets.filter(s => s.plots > 0).sort((a, b) => b.plots - a.plots);
+        if (!usable.length) {
+          setScanStatus({ ok: false, message: 'No plot grid found in that file. Expect cells like "907" over "8".' });
+        } else if (usable.length === 1) {
+          setConfig(prev => ({ ...prev, mapGrid: usable[0].grid }));
+          setScanStatus({ ok: true, filled: usable[0].plots, total: usable[0].plots, source: 'Excel' });
+          setStep(STEPS.MAP_GRID);
+        } else {
+          setSheetChoices(usable);       // let the user pick the tab
+          setStep(STEPS.MAP_SHEET);
+        }
+      }
+    } catch (err) {
+      console.error('import error', err);
+      setScanStatus({ ok: false, message: 'Could not read that file. Try Excel (.xlsx), CSV, or an ARM PDF.' });
+    } finally {
+      setScanBusy(false);
+    }
+  }, []);
+
+  const chooseSheet = useCallback((sheet) => {
+    setConfig(prev => ({ ...prev, mapGrid: sheet.grid }));
+    setScanStatus({ ok: true, filled: sheet.plots, total: sheet.plots, source: `Excel · ${sheet.name}` });
+    setSheetChoices(null);
+    setStep(STEPS.MAP_GRID);
+  }, []);
+
   // Grid editing helpers (map mode)
   const setGridCell = useCallback((r, c, patch) => {
     setConfig(prev => {
@@ -471,7 +523,7 @@ export default function PhotoBooth() {
       photosPerPlot: 1, pattern: 'serpentine_asc', customDirections: {}, plotTreatmentMap: {}, armLoaded: false,
       mapGrid: null, startCorner: 'TL', snake: true,
     });
-    setMapImage(null); setScanStatus(null); setScanProgress(0);
+    setMapImage(null); setScanStatus(null); setScanProgress(0); setSheetChoices(null);
     setStep(STEPS.MAP_TRIAL);
   }, []);
 
@@ -696,7 +748,7 @@ export default function PhotoBooth() {
     setShootingQueue([]); setCurrentIndex(0); setPhotos([]); setSkippedPlots([]);
     setNotes({}); setShowNoteInput(false); setCurrentNote('');
     setArmText(''); setArmParseStatus(null); setRetakeMode(false); setSavingProgress(null);
-    setMapImage(null); setStartedAt(null); setScanStatus(null); setScanBusy(false); setEditCell(null);
+    setMapImage(null); setStartedAt(null); setScanStatus(null); setScanBusy(false); setEditCell(null); setSheetChoices(null);
   };
 
   const toggleRep = (rep) => {
@@ -731,6 +783,13 @@ export default function PhotoBooth() {
         type="file"
         accept="image/*"
         onChange={handleScanSelect}
+        style={{ display: 'none' }}
+      />
+      <input
+        ref={fileImportRef}
+        type="file"
+        accept=".xlsx,.xls,.csv,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        onChange={handleFileImport}
         style={{ display: 'none' }}
       />
     </>
@@ -788,11 +847,20 @@ export default function PhotoBooth() {
 
             <div className="help-section">
               <h3 className="help-h">1 · Start a session</h3>
-              <p className="help-p">Tap <b>Manual Mode</b>. If you left a session unfinished, a green <b>Resume</b> card appears instead — tap it to pick up exactly where you stopped.</p>
+              <p className="help-p">Two ways in: <b>Use Trial Map</b> (load your real map so the order matches the field) or <b>Manual Mode</b> (set reps &amp; treatments by hand). If you left a session unfinished, a green <b>Resume</b> card appears — tap it to pick up exactly where you stopped.</p>
+            </div>
+
+            <div className="help-section help-highlight">
+              <h3 className="help-h">🗺️ Use Trial Map (recommended)</h3>
+              <p className="help-p">Name the trial, then load the map. Best to worst:</p>
+              <p className="help-p"><b>Import Excel or ARM PDF</b> — reads the file's own data, so it's exact. An ARM trial-map workbook (cells with the plot over the treatment) or an ARM Spray/Seeding Plan PDF both work. If the workbook has several tabs you'll pick which one is the map.</p>
+              <p className="help-p"><b>Scan a photo</b> — for when a picture is all you have. It reads what it can; anything it misses shows as a blank cell.</p>
+              <p className="help-p"><b>Build by hand</b> — start from an empty grid.</p>
+              <p className="help-p">Then <b>Check the Grid</b>: every plot with its treatment. Tap any cell to fix or fill it, add rows/columns, choose which corner you start from and whether you <b>snake</b> (alternate direction each row), set photos per plot, and go. Treatments are pulled in automatically, so file names include them — no separate ARM step needed.</p>
             </div>
 
             <div className="help-section">
-              <h3 className="help-h">2 · Set up the trial (8 quick steps)</h3>
+              <h3 className="help-h">2 · Manual setup (8 quick steps)</h3>
               <p className="help-p">
                 <b>Trial name</b> → <b>Number of reps</b> → <b>Treatments per rep</b> → <b>Select reps</b> to shoot →
                 <b> Photos per plot</b> (1, 2, 3…) → <b>Walking pattern</b> (serpentine, all-ascending, all-descending, or custom per rep) →
@@ -882,25 +950,30 @@ export default function PhotoBooth() {
         {viewMapZoom && mapImage && <ImageZoom url={mapImage.url} onClose={() => setViewMapZoom(false)} />}
         <div className="card">
           <span className="step-label">Trial Map · Step 2 of 3</span>
-          <h2 className="title">Scan Your Map</h2>
-          <p className="subtitle">Take or choose a photo of your trial map. The app reads the plot &amp; treatment numbers so the shooting order matches your field.</p>
-
-          {mapImage && (
-            <img src={mapImage.url} className="scan-preview" alt="Trial map" onClick={() => setViewMapZoom(true)} />
-          )}
+          <h2 className="title">Load Your Map</h2>
+          <p className="subtitle">Import the map so the shooting order matches your field.</p>
 
           {scanBusy ? (
             <div className="info-box info">
-              <p style={{ textAlign: 'center', marginBottom: 10 }}>Reading map… {Math.round(scanProgress * 100)}%</p>
-              <div className="progress-bar-bg"><div className="progress-bar-fill" style={{ width: `${Math.round(scanProgress * 100)}%` }} /></div>
+              <p style={{ textAlign: 'center', marginBottom: 10 }}>Reading map… {scanProgress > 0 ? `${Math.round(scanProgress * 100)}%` : ''}</p>
+              <div className="progress-bar-bg"><div className="progress-bar-fill" style={{ width: `${Math.max(8, Math.round(scanProgress * 100))}%` }} /></div>
             </div>
           ) : (
             <>
-              <button className="btn-success" onClick={pickScanImage}>{mapImage ? '📷 Choose a Different Photo' : '📷 Take / Choose Map Photo'}</button>
+              <button className="btn-success" onClick={pickImportFile}>📄 Import Excel or ARM PDF</button>
+              <p className="hint" style={{ marginTop: 8, marginBottom: 18 }}>Most accurate — reads the file's own data, no guessing.</p>
+
+              {mapImage && (
+                <img src={mapImage.url} className="scan-preview" alt="Trial map" onClick={() => setViewMapZoom(true)} />
+              )}
+
+              <button className="btn-secondary" onClick={pickScanImage}>{mapImage ? '📷 Choose a Different Photo' : '📷 Scan a Photo Instead'}</button>
+              <p className="hint" style={{ marginTop: 8 }}>Use when a picture is all you have. A straight-on, well-lit shot reads best — you'll get to fix any misreads next.</p>
+
               {scanStatus && !scanStatus.ok && (
                 <div className="info-box error" style={{ marginTop: 12 }}><p>{scanStatus.message}</p></div>
               )}
-              <p className="hint" style={{ marginTop: 14 }}>Tip: a straight-on, well-lit shot reads best. You'll get to fix any misreads next.</p>
+
               <div className="row">
                 <button className="btn-secondary flex1" onClick={() => setStep(STEPS.MAP_TRIAL)}>Back</button>
                 <button className="btn-secondary flex1" onClick={() => {
@@ -911,6 +984,30 @@ export default function PhotoBooth() {
               </div>
             </>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  // ─── MAP MODE: PICK A SHEET/TAB ────────────────────────────────────
+  if (step === STEPS.MAP_SHEET && sheetChoices) {
+    return (
+      <div className="page">
+        {cameraInput}
+        <div className="card">
+          <span className="step-label">Trial Map · Choose Tab</span>
+          <h2 className="title">Which Tab?</h2>
+          <p className="subtitle">That workbook has more than one sheet with plot numbers. Pick the trial map.</p>
+          {sheetChoices.map(s => (
+            <OptionButton
+              key={s.name}
+              selected={false}
+              title={s.name}
+              desc={`${s.plots} plot${s.plots === 1 ? '' : 's'} · ${s.grid.length} × ${s.grid[0]?.length || 0} grid`}
+              onPress={() => chooseSheet(s)}
+            />
+          ))}
+          <button className="btn-secondary" style={{ marginTop: 8 }} onClick={() => { setSheetChoices(null); setStep(STEPS.MAP_SCAN); }}>Back</button>
         </div>
       </div>
     );
@@ -948,6 +1045,7 @@ export default function PhotoBooth() {
         <div className="card wide">
           <h2 className="title">Check the Grid</h2>
           <p className="subtitle">
+            {scanStatus?.source ? `Imported from ${scanStatus.source}. ` : ''}
             {filled} of {cells} cells filled. Tap any cell to fix it. Empty cells are skipped.
           </p>
 
