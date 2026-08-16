@@ -32,7 +32,7 @@
 html, body, #root { height: 100%; width: 100%; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; overflow: hidden; }
 
-.page { display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 60px 16px 24px; background: var(--bg); overflow-y: auto; }
+.page { display: flex; flex-direction: column; align-items: center; min-height: 100vh; min-height: 100dvh; padding: 60px 16px 32px; background: var(--bg); overflow-y: auto; }
 .page.center { justify-content: center; }
 
 .card { background: var(--card); border-radius: 20px; border: 1px solid var(--card-border); padding: 28px; width: 100%; max-width: 420px; }
@@ -57,7 +57,7 @@ button { cursor: pointer; border: none; font-family: inherit; width: 100%; }
 .muted-text { color: var(--text-muted) !important; font-size: 14px !important; font-weight: 600 !important; }
 button:disabled { opacity: 0.4; cursor: default; }
 .flex1 { flex: 1; }
-.link-danger { background: none; border: none; color: var(--red-light); font-size: 12px; cursor: pointer; margin-top: 6px; width: auto; padding: 0; text-align: left; }
+.link-danger { background: none; border: none; color: var(--red-light); font-size: 13px; cursor: pointer; width: auto; padding: 10px 4px; text-align: left; min-height: 40px; }
 
 /* Inputs */
 .input { width: 100%; padding: 16px 18px; border-radius: 12px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text); font-size: 18px; font-weight: 500; font-family: inherit; outline: none; }
@@ -98,7 +98,7 @@ button:disabled { opacity: 0.4; cursor: default; }
 .info-box p { font-size: 14px; font-weight: 600; }
 
 /* Shooting */
-.shooting-page { display: flex; flex-direction: column; min-height: 100vh; padding: 60px 16px 24px; background: var(--bg); justify-content: space-between; }
+.shooting-page { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; padding: 60px 16px 32px; background: var(--bg); justify-content: space-between; gap: 16px; }
 .shooting-topbar { display: flex; justify-content: space-between; margin-bottom: 8px; }
 .shooting-center { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; }
 .progress-bar-bg { width: 100%; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.08); }
@@ -119,7 +119,7 @@ button:disabled { opacity: 0.4; cursor: default; }
 .alert-banner.error { background: var(--red-bg); border-color: var(--red-border); color: var(--red-light); }
 
 /* Review */
-.review-page { display: flex; flex-direction: column; height: 100vh; max-height: 100vh; padding: 60px 16px 24px; background: var(--bg); align-items: center; }
+.review-page { display: flex; flex-direction: column; height: 100vh; height: 100dvh; max-height: 100vh; max-height: 100dvh; padding: 60px 16px 32px; background: var(--bg); align-items: center; }
 .review-card { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--card); border-radius: 20px; border: 1px solid var(--card-border); padding: 28px; width: 100%; max-width: 460px; }
 .review-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; margin-bottom: 16px; }
 .review-buttons { flex-shrink: 0; }
@@ -139,7 +139,21 @@ button:disabled { opacity: 0.4; cursor: default; }
 
 /* Safe area for notch */
 @supports (padding-top: env(safe-area-inset-top)) {
-  .page, .shooting-page, .review-page { padding-top: calc(env(safe-area-inset-top) + 20px); padding-bottom: calc(env(safe-area-inset-bottom) + 16px); }
+  .page, .shooting-page, .review-page {
+    padding-top: calc(env(safe-area-inset-top) + 24px);
+    /* Clear the home indicator AND leave a comfortable margin so the last
+       button is never flush against the bottom edge. */
+    padding-bottom: calc(env(safe-area-inset-bottom) + 32px);
+    padding-left: calc(env(safe-area-inset-left) + 16px);
+    padding-right: calc(env(safe-area-inset-right) + 16px);
+  }
+  /* Full-screen overlays need the same insets — they sit outside page flow. */
+  .map-overlay, .map-side-overlay, .zoom-overlay {
+    padding-top: calc(env(safe-area-inset-top) + 16px);
+    padding-bottom: calc(env(safe-area-inset-bottom) + 16px);
+    padding-left: calc(env(safe-area-inset-left) + 16px);
+    padding-right: calc(env(safe-area-inset-right) + 16px);
+  }
 }
 
 /* Map button in topbar */
@@ -152,7 +166,7 @@ button:disabled { opacity: 0.4; cursor: default; }
 .map-modal { background: #0f1f3a; border: 1px solid var(--card-border); border-radius: 20px; width: 100%; max-width: 480px; padding: 20px; display: flex; flex-direction: column; max-height: 100%; }
 .map-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .map-title { font-size: 22px; font-weight: 800; color: var(--text); }
-.map-close { width: 36px; height: 36px; border-radius: 18px; background: rgba(255,255,255,0.08); color: var(--text); font-size: 18px; padding: 0; }
+.map-close { width: 44px; height: 44px; border-radius: 22px; flex-shrink: 0; background: rgba(255,255,255,0.08); color: var(--text); font-size: 18px; padding: 0; }
 .map-hint { font-size: 12px; color: var(--text-muted); margin-bottom: 16px; }
 .map-grid-scroll { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .map-rep-row { margin-bottom: 16px; }
@@ -178,7 +192,7 @@ button:disabled { opacity: 0.4; cursor: default; }
 .resume-sub { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
 
 /* Link-style buttons */
-.link-blue { background: none; border: none; color: var(--blue-light); font-size: 13px; font-weight: 600; cursor: pointer; padding: 0; width: auto; display: block; text-align: left; }
+.link-blue { background: none; border: none; color: var(--blue-light); font-size: 13px; font-weight: 600; cursor: pointer; padding: 8px 4px; width: auto; display: block; text-align: left; min-height: 38px; }
 
 /* Reference map thumbnail row */
 .map-ref-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
