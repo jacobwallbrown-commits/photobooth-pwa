@@ -437,7 +437,7 @@ export default function PhotoBooth() {
         setScanStatus({ ok: false, message: "Couldn't read a grid. Try a clearer/closer image, or build it by hand." });
       } else {
         setConfig(prev => ({ ...prev, mapGrid: res.grid }));
-        setScanStatus({ ok: true, filled: res.filled, total: res.total });
+        setScanStatus({ ok: true, filled: res.filled, total: res.total, anchored: res.anchored ?? res.filled, inferred: res.inferred || 0 });
         setStep(STEPS.MAP_GRID);
       }
     } catch (err) {
@@ -502,7 +502,7 @@ export default function PhotoBooth() {
     setConfig(prev => {
       const grid = prev.mapGrid.map(row => row.slice());
       const cur = grid[r][c] || { plot: null, treatment: null };
-      const next = { ...cur, ...patch };
+      const next = { ...cur, ...patch, inferred: false, trtUnsure: false };
       grid[r][c] = (next.plot == null && next.treatment == null) ? null : next;
       return { ...prev, mapGrid: grid };
     });
@@ -1046,17 +1046,20 @@ export default function PhotoBooth() {
           <h2 className="title">Check the Grid</h2>
           <p className="subtitle">
             {scanStatus?.source ? `Imported from ${scanStatus.source}. ` : ''}
-            {filled} of {cells} cells filled. Tap any cell to fix it. Empty cells are skipped.
+            {scanStatus?.inferred
+              ? `${scanStatus.anchored} plot numbers read, ${scanStatus.inferred} filled in from the map's numbering (dashed) — give those a glance. `
+              : `${filled} of ${cells} cells filled. `}
+            Tap any cell to fix it. A "?" after a treatment means it was a low-confidence read. Empty cells are skipped.
           </p>
 
           <div className="grid-scroll">
             <div className="edit-grid" style={{ gridTemplateColumns: `repeat(${grid[0]?.length || 1}, 58px)` }}>
               {grid.map((row, r) => row.map((cell, c) => (
                 <button key={`${r}-${c}`}
-                  className={`edit-cell ${cell && cell.plot != null ? '' : 'empty'} ${cell && cell.plot != null && cell.treatment == null ? 'no-trt' : ''}`}
+                  className={`edit-cell ${cell && cell.plot != null ? '' : 'empty'} ${cell && cell.plot != null && cell.treatment == null ? 'no-trt' : ''} ${cell?.inferred ? 'inferred' : ''}`}
                   onClick={() => setEditCell({ r, c })}>
                   <span className="ec-plot">{cell?.plot ?? '+'}</span>
-                  <span className="ec-trt">{cell?.treatment != null ? `T${cell.treatment}` : (cell?.plot != null ? 'T?' : '')}</span>
+                  <span className={`ec-trt ${cell?.trtUnsure ? 'unsure' : ''}`}>{cell?.treatment != null ? `T${cell.treatment}${cell.trtUnsure ? '?' : ''}` : (cell?.plot != null ? 'T?' : '')}</span>
                 </button>
               )))}
             </div>

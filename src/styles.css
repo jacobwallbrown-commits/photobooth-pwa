@@ -212,6 +212,9 @@ button:disabled { opacity: 0.4; cursor: default; }
 .edit-cell.empty { background: transparent; border-style: dashed; border-color: rgba(255,255,255,0.1); color: var(--text-faint); }
 .edit-cell.no-trt { border-color: var(--yellow-border); }
 .edit-cell.taken { background: var(--green-bg); border-color: var(--green-border); }
+.edit-cell.inferred { border-style: dashed; border-color: var(--yellow-border); }
+.edit-cell.inferred .ec-plot { color: var(--yellow); font-style: italic; }
+.ec-trt.unsure { color: var(--yellow); }
 .ec-plot { font-size: 13px; font-weight: 700; line-height: 1.1; }
 .ec-trt { font-size: 10px; color: var(--text-muted); line-height: 1.1; }
 .edit-cell.taken .ec-trt { color: var(--green-light); }
